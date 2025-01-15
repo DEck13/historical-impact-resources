@@ -1,0 +1,381 @@
+---
+title: "Technical Report: constructing the historical eligible population"
+author: "Elisha Cohen, Adrian Burgos Jr., Shen Yan, and Daniel J. Eck"
+date: ""
+output: html_document
+urlcolor: blue
+---
+
+
+## 
+
+In this technical report we go through the steps that we took to construct the historical eligible population used in our analyses. 
+
+Our principle assumption in our analyses with our Full House Models is that latent ability is assumed to follow the same distribution for all people, no matter their gender or their place of birth. Therefore, our estimate of the historical eligible population will reflect the favoritism to males and Europeans present in the Pantheon rankings ([Yu et al (2016)](https://www.nature.com/articles/sdata201575)). 
+
+Population data collection is through 05/17/2022. The Pantheon data used is the [2020 Person Dataset version 2.0](https://pantheon.world/data/datasets). We load in the following software packages:
+
+\vspace{12pt}
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(readxl)
+library(splines)
+library(Hmisc)
+#library(xtable)
+```
+
+
+## Initial tabulation of total historical population
+
+The first step for constructing our historical eligible population is to estimate how many people have lived on Earth from 3500 BC to 1980. This range represents the historical population considered by Pantheon where we assume that a present figure should be age 40 or older to be eligible for a top spot on the Pantheon ranking list. 
+
+We start with the following table from the [Population Reference Bureau (PRB)](https://www.prb.org/articles/how-many-people-have-ever-lived-on-earth/) that was collected on November, 2022.
+
+\vspace{12pt}
+
+```{r}
+# PRB link: https://www.prb.org/articles/how-many-people-have-ever-lived-on-earth/
+# Sources as of November 2022: Toshiko Kaneda, Charlotte Greenbaum, and 
+# Carl Haub, 2022 World Population Data Sheet (Washington, DC: Population 
+# Reference Bureau, 2022); United Nations, Department of Economic and 
+# Social Affairs, World Population Prospects: The 2022 Revision (New York: 
+# United Nations, 2022); personal communication with Dudley L. Poston Jr., 
+# Professor of Sociology and the George T. and Gladys H. Abell Professor 
+# of Liberal Arts, Texas A&M University.   
+mat = rbind(
+  c(-50000, 7856100002),
+  c(-8000, 	8993889771),
+  c(1,     55019222125),
+  c(1200,  81610565125),
+  c(1650,  94392567578),
+  c(1750,  97564499091),
+  c(1850, 101610739100),
+  c(1900, 104510976956), 
+  c(1950, 107901175171), 
+  c(2000, 113966170055), 
+  c(2010, 115330173460), 
+  c(2022, 117020448575)
+  )
+colnames(mat) = c("year", "cum_pop")
+dat = as.data.frame(mat)
+```
+
+\vspace{12pt}
+We now estimate cumulative population for years between 3500 BC and 1980 AD with a well-fitting nonlinear model. This model yields residuals that miss the cumulative population values by less than 3%.
+
+\vspace{12pt}
+```{r}
+m1 = lm(cum_pop ~ year + I(year^2) + I(exp(year/1000)), data = dat)
+summary(m1)
+
+plot(dat$cum_pop, m1$residuals/dat$cum_pop, 
+     xlab = "cumulative population", 
+     ylab = "residual divided by cumulative population", 
+     pch = 19)
+```
+
+\vspace{12pt}
+And we obtain the increases in cumulative population for successive time periods over the relevant years. Our data set starts out with 39,128,604 people alive in 3500 BC, the average value from [Scott Manning's world population estimates](https://www.scottmanning.com/archives/World%20Population%20Estimates%20Interpolated%20and%20Averaged.pdf).
+
+\vspace{12pt}
+```{r}
+p1 = predict(m1, newdata = data.frame(year = -3500))
+p2 = predict(m1, newdata = data.frame(year = 1983))
+#tot = dat %>% filter(year == 2022) %>% dplyr::select(cum_pop) 
+dat2 = data.frame(year = c(-3500 + 0:54 *100, 1980), 
+                   cum_pop = predict(m1, newdata = 
+                                    data.frame(year = c(-3500 + 0:54 *100, 1980))))
+
+dat3 = dat2 %>% 
+  # https://www.scottmanning.com/archives/World%20Population%20Estimates%20Interpolated%20and%20Averaged.pdf
+  mutate(cumulative_pop = cum_pop - cum_pop[1] + 39128604 ) %>% 
+  dplyr::select(year, cumulative_pop)
+dat3$diff = c(dat3$cumulative_pop[1], dat2 %>% pull(cum_pop) %>% diff())
+```
+
+
+
+## Accounting for discrimination 
+
+We first load in the Pantheon data and display the top 50 names when arranged by HPI.
+
+\vspace{12pt}
+```{r, message=FALSE, warning=FALSE}
+## load in data set
+persons2020 = read_csv("person_2020_update.csv")
+
+## get a subset variables
+persons2020_small = persons2020 %>% dplyr::select(name, gender, age, birthyear, 
+                                            hpi, l_, non_en_page_views, coefficient_of_variation) %>% 
+  mutate(A = log(age, base = 4) - (70-age)/7 *ifelse(age < 70,1,0))
+
+persons2020_small %>% 
+  dplyr::select(name, birthyear, gender, hpi) %>% 
+  as.data.frame() %>% head(50)
+```
+
+\vspace{12pt}
+In the above ranking list there are only three women (one being the Mother of Jesus) and only 13 people born outside of Europe. 
+
+
+
+#### Discrimination against women
+
+We will now adjust the historical eligible population to reflect the low total of women appearing in Pantheon's top 50 list. 
+<!-- Our approach will be to first calculate the Binomial proportion so that  -->
+We see that only 3 of Pantheon's top 50 are women. We will therefore reduce the total population so that only 3/47 are women (the number of women to men).
+
+<!-- \vspace{12pt} -->
+<!-- ```{r} -->
+<!-- # 3 women in top 50 (6%). Compute the largest Binomial proportion that  -->
+<!-- # could produce 6% representation with a p-value of 0.05. -->
+<!-- women_pct = function(n,p){ -->
+<!--   sum(sapply(0:3,  -->
+<!--              function(x) dbinom(x, size = n, prob = p))) - 0.50 -->
+<!-- } -->
+
+<!-- p50 = uniroot(f = function(p) women_pct(n=50,p), lower = 0.0001, upper = 0.80 )$root -->
+<!-- p50 -->
+<!-- ``` -->
+
+We will allow for gender discrimination to dissipate over time.We will assume that women were excluded from eligibility to reach the Pantheon top 50 until 1 AD. We will then allow women membership to increase to 7/43 in 1980 with a rate increase in 1900 which corresponds to worldwide womens' suffrage movements. The value 7/43 corresponds to the number of women to men in the Pantheon top 50 through the years 1900 and 1980. This approach is constrained so that the proportion of women appearing in the eligible population is 3/47. 
+
+\vspace{12pt}
+```{r}
+## assume that women were excluded from membership in the HPI metric 
+## up to year 1, and 80% membership in 1973. Then find the proportion 
+## of women at year 1900 (around women suffrage movements) so that the 
+## proportion of women membership is equal to the previously computed 
+## Binomial proportion
+prop = 7/43
+women_diff = function(z){
+  sum(approx(x = c(-3500,1,1900,1980), y = c(0.5,0.5,z,0.5* (1 + prop)), 
+             xout = dat3 %>% pull(year))$y * dat3$diff) / 
+    dat3$cumulative_pop[nrow(dat3)] - 0.5 *(1 + 3/47)
+}
+z_root = uniroot(women_diff, lower = 0.1, upper = 1)$root
+
+## compute differences in cumulative populations between successive 
+## time periods scaled by the previously computed women membership 
+## proportion
+dat3$diff_women = approx(x = c(-3500,1,1900,1980), 
+                          y = c(0.5,0.5,z_root,0.5 * (1 + prop)), 
+                          xout = dat3 %>% pull(year))$y * dat3$diff
+dat4 = data.frame(year = dat3$year, diff = dat3$diff_women, 
+                   cumulative_pop = cumsum(dat3$diff_women))
+```
+
+
+#### Discrimination against non-Europeans and non-USA citizens
+
+We now have the historical eligible population after adjusting for discrimination against women that is present in the Pantheon ranking list. We will now perform a similar set of adjustments for discrimination against non-Europeans.
+
+We first obtain European population data from the [Maddison Project Database](https://www.rug.nl/ggdc/historicaldevelopment/maddison/releases/maddison-project-database-2020). This data contains regional population tallies from 1820-2018.
+\vspace{12pt}
+
+
+```{r, message=FALSE, warning=FALSE}
+## Get regional populations from the Maddison Project Database link below:
+regional_pop = read_excel("~/research/pantheon/mpd2020.xlsx", 
+                           sheet = "Regional data")
+regional_pop$USA = c(9638453 / 1000,   # 1820
+                     23191876 / 1000,  # 1850
+                     38558371 / 1000,  # 1870
+                     76.3 * 1000,      # 1900
+                     106021537 / 1000, # 1920
+                     132164569 / 1000, # 1940
+                     151325798 / 1000, # 1950
+                     179.3 * 1000,     # 1960
+                     203392031 / 1000, # 1970
+                     226.5 * 1000,     # 1980
+                     250.1 * 1000,     # 1990
+                     282.2 * 1000,     # 2000
+                     309.3 * 1000,     # 2010
+                     323.1 * 1000,     # 2016
+                     325.1 * 1000,     # 2017
+                     326.8 * 1000)     # 2018   
+```
+
+
+\vspace{12pt}
+We then obtain European population data for year 1 AD from [Wikipedia](https://en.wikipedia.org/wiki/List_of_states_by_population_in_1_CE).
+\vspace{12pt}
+
+
+```{r}
+## Find regional populations for year 1 using the links below: 
+# https://en.wikipedia.org/wiki/List_of_states_by_population_in_1_CE
+# https://www.rug.nl/ggdc/
+dat_WIKI_1CE = data.frame(Year = 1, 
+                           Western_Europe = 24700,
+                           Western_Offshoots = 1170,
+                           Eastern_Europe = 4750,
+                           Latin_America = 18600, 
+                           Asia_South_and_South_East = 75000,
+                           Asia_East = 3000 + 59600,
+                           Middle_East = 36600,
+                           Sub_Sahara_Africa = 16500, 
+                           World = 249420, 
+                           USA = NA)
+regional_pop = rbind(dat_WIKI_1CE, regional_pop)
+## compute proportion of World population that is European
+## compute proportion of World population that is European or American
+regional_pop %>% 
+  mutate(Epct = (Western_Europe + Eastern_Europe)/World) %>% 
+  mutate(USAEpct = (Western_Europe + Eastern_Europe + USA)/World) %>% 
+  dplyr::select(Year, Western_Europe, Eastern_Europe, World, 
+                Epct, USAEpct)
+```
+
+\vspace{12pt}
+We now calculate the proportion of the world's population from Europe for the years 1000, 1500, 1600, 1700, 1800, and 1900. We used a variety of sources for these calculations. These data were collected on 06/23/2023. The sources and the relevant years that they were used for are:
+
+1. European population for 1000 used Urlanis (1941) as presented on [Wikipedia](https://en.wikipedia.org/wiki/Medieval_demography).
+     <!-- @article{urlanis1941rost, -->
+     <!--     title={Rost naseleniya v Evrope [The Growth of the Population of Europe]}, -->
+     <!--     author={Urlanis, B Ts}, -->
+     <!--     journal={Moscow, Gospolitizdat Publ}, -->
+     <!--     year={1941} -->
+     <!--   } -->
+2. World population from 1000-1900 is from [Statista](https://www.statista.com/statistics/1006502/global-population-ten-thousand-bc-to-2050/) 
+3. European populations for 1500 and 1600 is from [Britannica](https://www.britannica.com/topic/history-of-Europe/Demographics). 
+4. European population in 1700 is from [World of Data](https://www.youtube.com/watch?v=dkhcNoMNHA0) 
+5. European population in 1800 and 1900 from [Our World in Data](https://ourworldindata.org/grapher/population-since-1800?tab=table&country=CHN~IND~NGA~USA~BRA~IRN~ZAF).
+
+We do not find an estimate of European population for year 3500 BC. We will assume that the proportion of the world's population that is European is 0.11. This is about the same proportion as year 1 AD.
+\vspace{12pt}
+
+```{r}
+## aggregate results and add to our data set
+Epct = rbind(regional_pop %>% 
+  mutate(Epct = (Western_Europe + Eastern_Europe) / World, 
+         USAEpct =  (Western_Europe + Eastern_Europe + USA) / World) %>% 
+                select(Year, Epct, USAEpct), 
+              c(1000, 56.4/295, NA), 
+              c(1500, 61.6/461, NA),
+              c(1600, 78.0/554, NA), 
+              c(1700, 122/603, (122 + 0.25)/603), 
+              c(1800, 195/990, (195 + 5.3)/990),
+              c(-3500, 0.11, NA)
+) %>% arrange(Year)
+dat5 = dat4 %>% mutate(Epct = approx(
+    x = Epct$Year, 
+    y = Epct$Epct, 
+    xout = dat4$year)$y) 
+dat5$USAEpct = approx(
+    x = Epct$Year, 
+    y = Epct$USAEpct, 
+    xout = dat4$year)$y
+```
+
+\vspace{12pt}
+We will now adjust the historical eligible population to reflect the low total of non-Europeans appearing in Pantheon's top 50 list. We see that 74% of Pantheon's top 50 are Europeans. We allow the proportion of Europeans to change, reflecting increases in non-European membership in the Pantheon top 50 when the date range is restricted to modern times. 
+
+This increase is offset by a concentration of membership from the United States. There are 16 people in the Pantheon's top 50 list born in the United States when attention is restricted to people born between 1900-1980. There are 20 people in the Pantheon's top 50 list born in Europe when attention is restricted to people born between 1900-1980. From 1900 on, we will combine the membership from Europe and United States into a single group.
+\vspace{12pt}
+
+<!-- # ```{r} -->
+<!-- # # 37 Europeans in top 50 (74%). Compute the smallest Binomial proportion that  -->
+<!-- # # could produce 74% representation with a p-value of 0.50. -->
+<!-- # Europe_pct = function(n,p){ -->
+<!-- #   sum(sapply(37:50, function(x) dbinom(x, size = n, prob = p))) - 0.50 -->
+<!-- # } -->
+<!-- #  -->
+<!-- # p50 = uniroot(f = function(p) Europe_pct(n=50,p), lower = 0.0001, upper = 0.999 )$root -->
+<!-- # #sum(sapply( (d2 %>% pull(isEurope) %>% sum()):50, function(x){ -->
+<!-- # #  dbinom(x, size = 50, prob = p50) -->
+<!-- # #})) -->
+<!-- # p50 -->
+<!-- # ``` -->
+
+
+
+
+
+
+```{r}
+## We compute an overall European membership proportion based on the 
+## representation in the top 50 Pantheon list over time:
+##      Europe pct -3500-1980: 39/50
+##      Europe pct -3500-1900: 39/50
+##       Europe pct 1801-1900: 41/50
+##       Europe pct 1900-1980: 20/50
+##          USA pct 1900-1980: 16/50
+## USA + Europe pct 1900-1980: 36/50  
+##
+## scale the cumulative population differences adjusted for discrimination 
+## against women by European discrimination
+dat6 = dat5 %>% mutate(Escale = ifelse(year < 1900, 0.74, 0)) %>% 
+  mutate(Escale = ifelse(year >= 1950, 0.40, Escale)) %>% 
+  mutate(Escale = ifelse(year == 1900, mean(c(0.4, 0.74)), Escale)) %>% 
+  mutate(Epart = Epct / Escale) %>% 
+  mutate(USAEscale = ifelse(year < 1900, 0.01, 0)) %>% # not relevant
+  mutate(USAEscale = ifelse(year >= 1900, 0.72, USAEscale)) %>% 
+  mutate(USAEpart = USAEpct / USAEscale) %>% 
+  mutate(part = Epart)
+dat6[dat6$year %in% c(1900,1980), ]$part = 
+  dat6[dat6$year %in% c(1900,1980), ]$USAEpart
+
+## add smoothing
+dat7 = dat6 %>% 
+  mutate(part = predict(lm(part ~ ns(year, df=5), data=dat6))) %>% 
+  mutate(diff_Europe = round(diff * part)) %>% 
+  mutate(cumulative_membership = cumsum(diff_Europe))
+
+## Calculate the HPI eligible cumulative population for every year from 
+## -3500 to 1973 by linear interpolation and linear extrapolation
+## extender. The year 1973 is chosen to only include people who have 
+## reached the age of 50 
+range = -3500:1980
+dat_HPI_eligible = 
+  data.frame(year = range, 
+             cumulative_population = 
+               approxExtrap(x = dat7$year, 
+                            y = dat7$cumulative_membership, 
+                            xout = range)$y
+)
+#write_csv(dat_HPI_eligible, "dat_HPI_eligible.csv")
+```
+
+\vspace{12pt}
+Below we plot our estimate of the cumulative historical eligible population.
+\vspace{12pt}
+
+```{r}
+ggplot(dat_HPI_eligible) + 
+  aes(x = year, y = cumulative_population) + 
+  ylim(-1e6, 1.2e10) + 
+  geom_line() + 
+  theme_minimal() + 
+  labs( x = "year", y = "cumulative population",
+        title ="Cumulative historical eligible population", 
+        subtitle = "3500 BC to 1980 AD")
+```
+
+\vspace{12pt}
+Below we plot population increases over the centuries.
+\vspace{12pt}
+
+
+```{r}
+dat_centuries = data.frame(
+  year = c(-3500 + 0:54 * 100, 1980), 
+  population = 
+    c(dat_HPI_eligible %>% filter(year == -3500) %>%
+        pull(cumulative_population), 
+      dat_HPI_eligible %>% 
+        filter(year %% 100 == 0 | year == 1980) %>%
+        pull(cumulative_population) %>% diff())
+)
+
+ggplot(dat_centuries) + 
+  aes(x = year, y = population) + 
+  geom_bar(stat = "identity") +
+  theme_minimal() + 
+  labs( x = "year", y = "population",
+        title ="Historical eligible population for each century", 
+        subtitle = "3500 BC to 1980 AD")
+```
+

@@ -1,0 +1,1453 @@
+---
+title: "Technical Report: Full House Modeling for rankings of historical figures"
+author: "Elisha Cohen, Adrian Burgos Jr., Shen Yan, and Daniel J. Eck"
+date: ""
+output:
+  html_document:
+    toc: true
+    toc_depth: 3    
+urlcolor: blue
+---
+
+<script type="text/x-mathjax-config">
+MathJax.Hub.Config({
+  TeX: { equationNumbers: { autoNumber: "AMS" } }
+});
+</script>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+
+In this technical report we go through the steps that we took to rank historical figures via an era-neutral version of the Historical Popularity Index (HPI) in [Yu et al (2016)](https://www.nature.com/articles/sdata201575) obtained via Full House Modeling. This technical report is reproducible by anyone who has the fullhouse package and our data sets. Long code chunks that create plots will be suppressed. Code for these plots is available in the accompanying .Rmd file.
+
+Population data collection is through 05/17/2022. The Pantheon data used is the [2020 Person Dataset version 2.0](https://pantheon.world/data/datasets). We load in the following software packages:
+
+\vspace{12pt}
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(parallel)
+library(orderstats)
+library(Pareto)
+library(doParallel)
+library(kableExtra)
+library(fullhouse)
+
+# get number of cores
+nCores = detectCores() - 2
+nCores
+```
+
+\vspace{12pt}
+We load in the data sets used in this analysis:
+\vspace{12pt}
+
+```{r}
+## estimate of historical eligible population
+dat_HPI_eligible = read_csv("dat_HPI_eligible.csv")
+## Pantheon data
+persons2020 = read_csv("person_2020_update.csv")
+```
+
+<!-- \vspace{12pt} -->
+<!-- We also source in supporting functions from source.R: -->
+<!-- \vspace{12pt} -->
+
+<!-- ```{r} -->
+<!-- source("source.R") -->
+<!-- ``` -->
+
+\vspace{12pt}
+
+We remove duplicates of bios with a common name and birth year.
+
+\vspace{12pt}
+
+```{r}
+persons2020 = 
+  persons2020 %>% distinct(name, birthyear, .keep_all = TRUE)
+```
+
+\vspace{12pt}
+
+We change Donald Trump's 2020 HPI value of 94.9 to his 2022 HPI value of 78.13. Our aim is to study the most impactful people in history. We do not think it proper to conduct our analyses with Donald Trump's popularity in 2020 when he has fallen 679 spots in two years.
+
+\vspace{12pt}
+
+```{r}
+persons2020 = persons2020 %>% 
+  mutate(hpi = ifelse(name == "Donald Trump", 78.13, hpi)) %>% 
+  arrange(desc(hpi))
+```
+
+
+# Historical eras
+
+We now define historical eras. Here the eras constitute a subpopulation of contemporaneous people. People within a common era are viewed as "competing against each other" for large HPI values. 
+
+
+## Eras defined as "vs one's peers"
+
+Here we define eras to constitute a relatively narrow range of years. The most recent year in our analysis in 1980. The eras will be defined by the centuries, and we will only consider eras that have at least 50 people in the Pantheon data set. Our first era begins in 800 BC, the second begins in 700 BC, and so on.
+
+We will define Jesus's and other Christian figures' birth year to be 0 AD. This is done to separate memorable Christian figures from memorable Roman figures into different peer groups. We moved Jesus instead of Julius Ceasar and other Roman figures because [Jesus's birth year is not exactly known](https://en.wikipedia.org/wiki/Jesus).
+\vspace{12pt}
+
+
+```{r}
+## consider generations with increasing year ranges 
+generations = c(-8:19 * 100)
+persons2020_small = persons2020 %>% 
+  dplyr::select(name, occupation, birthyear, gender, bplace_country, hpi) %>% 
+  filter(birthyear >= -800, birthyear <= 1980)
+persons2020_small$group = 
+  unlist(lapply(persons2020_small$birthyear, 
+    function(x) sum(x >= generations)))
+persons2020_small = persons2020_small %>% filter(group > 0)
+persons2020_small = persons2020_small %>% 
+  mutate(group = ifelse(name %in% c("Jesus", "Saint Peter", "Mary Magdalene", 
+                     "Andrew the Apostle", "James, son of Alphaeus"), 9, group))
+```
+
+\vspace{12pt}
+Before we begin our analysis we show HPI vs birthyear below. The red line indicates the 50th largest value of HPI. The grey rectangle indicates the period in time between 0 CE and 1162 CE (Genghis Kahn's birth).
+
+\vspace{12pt}
+```{r}
+hpi_50 = persons2020_small %>% arrange(desc(hpi)) %>% slice(50:50) %>% pull(hpi)
+
+persons2020_small %>% 
+  filter(hpi >= 75) %>% 
+  ggplot() + 
+  aes(x = birthyear, y = hpi) + 
+  geom_point() + 
+  geom_hline(yintercept = hpi_50, col = "red") + 
+  annotate("rect", fill = "grey", alpha = 0.2, 
+           xmin = 0, xmax = 1162,
+           ymin = -Inf, ymax = Inf) + 
+  theme_minimal() + 
+  labs(title = "HPI vs birthyear of historical figures", 
+       y = "HPI", x = "Birth year")
+```
+
+
+
+\vspace{12pt}
+We now split the Pantheon data set and historical eligible population data set into smaller chunks containing data for each separate era. Below are two important quantities: 
+
+1. **hpi\_generations**: This list contains the name, gender, birth year, and HPI value of individuals within the historical eras.
+2. **Epop\_generations**: This data set contains the the number of people that populate each era. This population is defined as the difference in the range of population tallies recorded for end points defining an era. The first era runs from 800 BC to right before 700 BC. The population of the era is the cumulative historical population at 700 BC minus the cumulative historical population at 800 BC.
+\vspace{12pt}
+
+
+```{r}
+## important quantities mentioned above
+hpi_generations = lapply(split(persons2020_small, 
+                               f = as.factor(persons2020_small$group)), 
+                         function(xx) xx %>% select(-group))
+## number of people in each era
+sapply(hpi_generations, nrow)
+
+Epop_generations = c(dat_HPI_eligible %>% 
+                       filter(year %in% c(generations, 1980)) %>% 
+                       pull(cumulative_population) %>% diff())
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+data.frame(Epop_generations, 
+           cum_pop = dat_HPI_eligible %>% 
+  filter(year %in% generations) %>% 
+  pull(cumulative_population), 
+  sort(generations))
+```
+
+
+\vspace{12pt}
+Below we display some information on each of the eras. We display the populations of an era, the cumulative proportion of the historical population through that era, and the number of Pantheon biographies in each era.
+\vspace{12pt}
+
+
+```{r}
+cum_prop_population = cumsum(Epop_generations) / sum(Epop_generations)
+gen_stats = data.frame(
+  gen_start = generations,
+  gen_end = c(generations[-1] -1, 1980),
+  gen_pop = Epop_generations, 
+  cum_prop_population = cum_prop_population, 
+  n = sapply(hpi_generations, nrow)
+)
+gen_stats 
+```
+
+\vspace{12pt}
+We now plot the eligible populations of the 28 eras constructed to define temporal peer groups.
+\vspace{12pt}
+
+```{r}
+ggplot(gen_stats) + 
+  aes(x = gen_start, y = gen_pop) +  
+  geom_bar(stat = "identity") + 
+  scale_x_continuous(breaks = seq(-800, 2000, by = 400)) + 
+  theme_minimal(base_size = 14) + 
+  labs(x = "year", y = "population",
+       title ="Historical eligible population for each century", 
+       subtitle = "800 BC to 1980 AD")
+```
+
+```{r, echo = FALSE}
+pdf("pop_century_era.pdf")
+ggplot(gen_stats) + 
+  aes(x = gen_start, y = gen_pop) +  
+  geom_bar(stat = "identity") + 
+  scale_x_continuous(breaks = seq(-800, 2000, by = 400)) + 
+  theme_minimal(base_size = 16) + 
+  labs( x = "year", y = "population",
+        title ="Historical eligible population for each century", 
+        subtitle = "800 BC to 1980 AD")
+dev.off()
+```
+
+
+## Eras defined as separate chapters in a history course
+
+Here we define eras as separate chapters in a sensible world history course. There will be 9 eras which follow the periodization for world history section on [UCLA's Public History Initiative web page](https://phi.history.ucla.edu/nchs/preface/developing-standards/). The first era, The Beginnings of Human Society, dates before the Pantheon data set, so it will contain no bios. We lag birth year by 40 years so that people who populate each era are not children in this era-defining context. These eras are encoded here:
+
+\vspace{12pt}
+```{r}
+# Era 1: The Beginnings of Human Society
+# Era 2: Early Civilizations and the Emergence of Pastoral Peoples, 4000-1000 BCE
+# Era 3: Classical Traditions, Major Religions, and Giant Empires, 1000 BCE-300 CE
+# Era 4: Expanding Zones of Exchange and Encounter, 300-1000 CE
+# Era 5: Intensified Hemispheric Interactions, 1000-1500 CE
+# Era 6: Emergence of the First Global Age, 1450-1770
+# Era 7: An Age of Revolutions, 1750-1914
+# Era 8: A Half-Century of Crisis and Achievement, 1900-1945
+# Era 9: The 20th Century Since 1945: Promises and Paradoxes
+era_assigner = function(yr, lag = 40){
+  yr = yr + lag
+  era = 2 + ifelse(yr > -1000,1,0) + 
+    ifelse(yr > 300,1,0) + 
+    ifelse(yr > 1000,1,0) + 
+    ifelse(yr > 1500,1,0) + 
+    ifelse(yr > 1770,1,0) + 
+    ifelse(yr > 1900,1,0) + 
+    ifelse(yr > 1945,1,0)
+  era
+}
+
+## add era assignments to Pantheon data set
+persons2020_small_hist = persons2020 %>% 
+  dplyr::select(name, occupation, birthyear, gender, bplace_country, hpi) %>% 
+  filter(birthyear <= 1980) %>% 
+  mutate(era = era_assigner(birthyear))
+```
+
+\vspace{12pt}
+We now split the Pantheon data set and historical eligible population data set into smaller chunks containing data for each separate era as done above.
+\vspace{12pt}
+
+
+```{r}
+generations_hist_by = c(-3500, -1040, 260, 960, 1460, 1730, 1860, 1905, 1940)
+generations_hist = c(-3500, -1000, 300, 1000, 1500, 1770, 1900, 1945, 1980)
+hpi_generations_hist = 
+  lapply(split(persons2020_small_hist, f = as.factor(persons2020_small_hist$era)), 
+         function(xx) xx %>% 
+           dplyr::select(name, occupation, birthyear, gender, bplace_country, hpi))
+
+Epop_generations_hist = dat_HPI_eligible %>% 
+  filter(year %in% generations_hist_by) %>% 
+  pull(cumulative_population) %>% diff()
+
+
+foo = do.call(rbind, lapply(seq_along(hpi_generations_hist), function(group){
+  cbind(hpi_generations_hist[[group]], Epop_generations_hist[[group]], group)
+}))
+colnames(foo)[5] = "npop"
+```
+
+
+\vspace{12pt}
+Below we display some information on each of the eras. We display the populations of an era, the cumulative proportion of the historical population through that era, and the number of Pantheon biographies in each era.
+\vspace{12pt}
+
+
+```{r}
+cum_prop_population_hist = cumsum(Epop_generations_hist) / 
+  sum(Epop_generations_hist)
+gen_stats_hist = data.frame(
+  gen_start = generations_hist[-length(generations_hist)],
+  gen_end = c(generations_hist[-c(1,length(generations_hist))]-1, 1980),
+  gen_pop = Epop_generations_hist, 
+  cum_prop_population = cum_prop_population_hist, 
+  n = sapply(hpi_generations_hist, nrow)
+)
+gen_stats_hist 
+```
+
+
+\vspace{12pt}
+We now plot the populations of the eight eras defined as separate chapters in a history course. 
+\vspace{12pt}
+
+
+
+```{r}
+gen_stats_hist = gen_stats_hist %>% 
+  mutate(cat = paste(gen_start, "to", gen_end), sep = "") %>% 
+  mutate(cat = fct_relevel(cat, "-3500 to -1001", "-1000 to 299",
+                           "300 to 999", "1000 to 1499", 
+                           "1500 to 1769", "1770 to 1899",
+                           "1900 to 1944", "1945 to 1980"))
+ggplot(gen_stats_hist) + 
+  aes(x = cat, y = gen_pop) + 
+  geom_col(fill = "black") +
+  theme_minimal(base_size = 16) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  labs( x = "year", y = "population",
+        title ="Historical eligible population change", 
+        subtitle = "3500 BC to 1980 AD")
+```
+
+```{r, echo = FALSE}
+pdf("cum_pop_eras_hist_class.pdf")
+gen_stats_hist = gen_stats_hist %>% 
+  mutate(cat = paste(gen_start, "to", gen_end), sep = "") %>% 
+  mutate(cat = fct_relevel(cat, "-3500 to -1001", "-1000 to 299",
+                           "300 to 999", "1000 to 1499", 
+                           "1500 to 1769", "1770 to 1899",
+                           "1900 to 1944", "1945 to 1980"))
+ggplot(gen_stats_hist) + 
+  aes(x = cat, y = gen_pop) + 
+  geom_col(fill = "black") +
+  theme_minimal(base_size = 16) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  labs( x = "year", y = "population",
+        title ="Historical eligible population change", 
+        subtitle = "3500 BC to 1980 AD") 
+dev.off()
+```
+
+
+
+
+
+# Full House modeling
+
+Full House Modeling uses an interpolated empirical CDF $\widetilde{F}_{Y_i}$ as an estimate of the true distribution function for the $Y$ data as in [Yan (2023)](https://arxiv.org/abs/2207.11332). This estimator is constructed in the following manner: First, we construct surrogate sample points $\widetilde{Y}_{i,(1)}, \ldots, \widetilde{Y}_{i,(n_i+1)}$ as, 
+
+ - $\widetilde{Y}_{i,(1)} =Y_{i,(1)}-Y^{*}_i$, 
+ - $\widetilde{Y}_{i,(j)} =\left(Y_{i,(j)}+Y_{i,(j-1)}\right) / 2, j=2, \ldots, n_i$, and 
+ - $\widetilde{Y}_{i,(n_i+1)} =Y_{i,(n_i)}+Y^{**}_i$. 
+
+Here, $Y^*_i$ is the value to construct the lower bound and $Y^{**}_i$ is the value to construct the upper bound. Now let,
+\begin{equation} \label{eq:empcdf}
+\widetilde{F}_{Y_i}(t) = 
+  \sum_{j=1}^{n_i}\left(\frac{j-1}{n_i} + \frac{t-\widetilde{Y}_{i,(j)}}{n_i\left(\widetilde{Y}_{i,(j+1)}-\widetilde{Y}_{i,(j)}\right)}\right) 1\left(\widetilde{Y}_{i,(j)} \leq t<\widetilde{Y}_{i,(j+1)}\right)+1\left(t \geq \widetilde{Y}_{i,(n_i+1)}\right).
+\end{equation}
+
+## Eras defined as "vs one's peers"
+
+We first compute $y^{\star\star}$ using the \texttt{compute\_ystarstar} function in the \texttt{fullhouse} package. First, the number of extreme observations $k$ is calculated following a similar approach to that outlined in Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332) and Section 5 of [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf) which is implemented in the \texttt{k\_finder} function in the \texttt{fullhouse} package. 
+
+\vspace{12pt}
+
+```{r k-compute-ystarstar-peers, cache = TRUE}
+system.time({
+  kmat = do.call(rbind, mclapply(seq_along(hpi_generations), 
+    FUN = function(j) {
+      k_finder(x = hpi_generations[[j]] %>% pull(hpi))  
+    }, mc.cores = nCores))
+})
+```
+
+```{r}
+kmat
+```
+
+\vspace{12pt}
+The task of computing $y^{\star\star}$ is implemented in the \texttt{compute\_ystarstar} function which is included in the \texttt{fullhouse} package (called below). This function computes $y^{\star\star}$ in the following manner: we first calculate $k$ as above. The upper bound $Y_i^{**}$ is estimated through a connection between $\widetilde{F}_{Y_i}(Y_{i,(n_i)})$ and the regression fit on $(h(p_{i,j,.5,n_i}), Y_{i,(j)})$, $j = n_i -k + 1,\ldots,n_i$ where $h$ is a selected model in the tail probabilities. The tail probability models that we consider are:
+
+ - logistic $(h(w) = a + bw + \epsilon)$,
+ - logistic quadratic $(h(w) = a + bw + cw^2 + \epsilon)$,
+ - log-logistic $(h(p) = a + b\log(w) + \epsilon)$,
+ - log-logistic quadratic $(h(p) = a + b\log(w) + c(\log(w))^2 + \epsilon)$,
+ - logistic cubic $(h(w) = a + bw + cw^2 + dw^3 + \epsilon)$,
+
+where 
+$$
+  w = \log\left(\frac{p}{1-p}\right).
+$$
+
+
+
+With a model $h$ selected (more on this below), we find $Y_i^{**}$ as the solution of the following optimization problem 
+\begin{equation} \label{eq:optim}
+  Y_i^{**} = \text{argmin}_y\Big|h^{-1}(Y_{i,(n_i)}) - \widetilde{F}_{Y_i}(Y_{i,(n_i)};y)\Big|,	
+\end{equation}
+where $\widetilde{F}_{Y_i}(\cdot;y)$ is $\widetilde{F}_{Y_i}$ defined in \eqref{eq:empcdf} with $y$ replacing $Y_i^{**}$ in its construction. 
+
+We select a tail probability model via the following steps: 
+
+1. Fit the logistic and logistic quadratic models. Use BIC to choose among these models. 
+2. Stop if the optimization problem \eqref{eq:optim} can be solved. 
+3. If the optimization problem \eqref{eq:optim} cannot be solved, then fit the log-logistic and log-logistic quadratic models. Use BIC to choose among these models.
+4. Stop if the optimization problem \eqref{eq:optim} can be solved. 
+5. If the optimization problem \eqref{eq:optim} cannot be solved, then fit the logistic cubic model.
+
+\vspace{12pt}
+
+```{r compute-ystarstar-peers, cache = TRUE}
+system.time({
+  out = mclapply(seq_along(hpi_generations), 
+    FUN = function(j) { 
+      compute_ystarstar(x = hpi_generations[[j]] %>% pull(hpi), 
+                        k = kmat[j, 1])
+      }, 
+    mc.cores = nCores)
+})
+
+## get ystarstar values
+ystar_mat = do.call(rbind, lapply(seq_along(hpi_generations), 
+  function(j) out[[j]]$ystar )
+)
+```
+
+
+\vspace{12pt}
+In addition to $y^{\star\star}$, the \texttt{compute\_ystarstar} function includes the tail probability model and data used to fit the model for each era.
+
+The modeling of the $k$ tail probabilities (described above) closely follows Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332). However, there are some notable differences. The main difference is that the simple modeling approach in Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332) does not work well for all eras that we consider. Namely, there is a problem with model fit in some circumstances and a value for $y^{\star\star}$ cannot be computed. Hence the expanded modeling class above. 
+
+We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
+\vspace{12pt}
+
+<!-- ```{r} -->
+<!-- lapply(1:28, function(j){ -->
+<!--   out = list(extreme_achiever =  -->
+<!--                (which.max(cooks.distance(out_n_out[[j]]$model)) == (length(out_n_out[[j]]$Y)-1)), -->
+<!--              maxCookD = max(cooks.distance(out_n_out[[j]]$model))) -->
+<!-- }) -->
+<!-- ``` -->
+
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 1:6){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))
+for(j in 7:12){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))
+for(j in 13:18){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+
+```{r}
+par(mfrow = c(2,3))
+for(j in 19:24){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+
+```{r}
+par(mfrow = c(2,2))
+for(j in 25:28){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+
+
+
+\vspace{12pt}
+We now compute latent talent estimates using Full House Modeling and the stored $y^{\star\star}$ values. This task is implemented in the \texttt{talent\_computing\_nonpara} function which is included in the \texttt{fullhouse} package and called below. These estimates of latent talent are
+$$
+	F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(\widetilde{F}_{Y_{i}}\left(Y_{i,(j)} \right)\right)\right) \approx F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(U_{i,(j)}\right)\right) = X_{i, (N_i - n_i + j)},
+$$
+where we suppose that $X_{i,j} \overset{iid}{\sim} \text{Pareto}(\alpha)$, $\alpha = 1.16$ (the value corresponding to the [Pareto principle](https://en.wikipedia.org/wiki/Pareto_principle)), $j = 1,\ldots,n_i$.
+
+
+\vspace{12pt}
+
+```{r talent-scores-peers, cache = TRUE}
+## vs your peers
+system.time({
+  hpi_adjust_vs_peers = 
+    do.call(rbind, 
+          mclapply(seq_along(hpi_generations), 
+                   mc.cores = nCores, function(j){
+                     cbind(hpi_generations[[j]], 
+                           "hpi_talent" = 
+                       talent_computing_nonpara(ystar = as.numeric(ystar_mat[j, 1]), 
+                                              y = hpi_generations[[j]] %>% pull(hpi), 
+                                              npop = Epop_generations[[j]]))
+                     })) %>% arrange(desc(hpi_talent))
+})
+```
+
+\vspace{12pt}
+Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 28 distinct eras defined by centuries to designate peer groups.
+\vspace{12pt}
+
+```{r}
+hpi_adjust_vs_peers %>% as.data.frame() %>% head(50)
+#write_csv(hpi_adjust_vs_peers, "hpi_adjust_vs_peers.csv")
+```
+
+
+
+\vspace{12pt}
+We now display some information on the components of Full House modeling. From [Yan (2023)](https://arxiv.org/abs/2207.11332) we have that
+$$
+  \widetilde{F}_{Y_i}\left(Y_{i,(j)}\right) \approx U_{i,(j)},
+$$
+
+where $\approx$ means approximately distributed, and $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$. Notice that $\widetilde{F}_{Y_i}$ satisfies the following,
+\begin{align*}
+  \widetilde{F}_{Y_i}\left(Y_{i,(n_i)}\right) 
+    &= \frac{n_i - 1}{n_i} + \frac{Y_{i,(n_i)} - \widetilde{Y}_{i,(n_i)}}{n_i\left(Y_{i,(n_i)} + Y_i^{\star\star} - \widetilde{Y}_{i,(n_i)}\right)} \\
+    &= 1 - \frac{1}{n_i} + \frac{1}{n_i}\left(\frac{\frac{Y_{i,(n_i)} - Y_{i,(n_i-1)}}{2}}{\frac{Y_{i,(n_i)} - Y_{i,(n_i-1)}}{2} + Y_{i}^{\star\star}}\right).
+\end{align*}
+Thus, how far someone stands above their peers is a balance between how far above their closest peer and the estimated maximum allowable value $Y_i^{\star\star}$ which is obtained from modeling of the tail probabilities of all the extreme performers. In this manner, increased spacing between successive extreme performers may offset the effect that  $Y_{i, (n_i)} - Y_{i(n_i-1)}$ has $\widetilde{F}_{Y_i}\left(Y_{i,(n_i)}\right)$ through an increase in $Y_i^{\star\star}$.
+
+
+In the table below, we report: 
+
+1. The difference that the highest achiever stood out from the next highest, $Y_{i, (n_i)} - Y_{i(n_i-1)}$.
+2. The number of memorable people in the era, $n_i$.
+3. The upper bound $Y_i^{\star\star}$.
+4. The realized Beta value $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$.
+5. The percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. This is a measure of how far the highest achiever stood from their peers.
+
+\vspace{12pt}
+
+
+```{r}
+foo = data.frame(diff = sapply(hpi_generations, function(x){
+  -head(x %>% pull(hpi) %>% diff(), 1)}),
+  n = sapply(hpi_generations, nrow), 
+  yss = ystar_mat) %>% 
+  mutate(balance = (diff/2)/((diff/2) + yss),
+         U_beta = 1 - 1/n + 1/n * (diff/2)/((diff/2) + yss),
+         p_beta = pbeta(U_beta, n, 1), 
+         group = seq_along(hpi_generations))
+foo
+```
+
+\vsapce{12pt}
+Below are the highest achievers in each era as judged by the percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. 
+\vspace{12pt}
+
+```{r}
+bar = cbind(foo, do.call(rbind, 
+  lapply(seq_along(hpi_generations), 
+         function(j) hpi_generations[[j]][1, ]))) %>% 
+  select(name, birthyear, hpi, diff, yss, balance, p_beta) %>% 
+  mutate(across(hpi:p_beta, ~round(.x, 3))) %>% 
+  arrange(desc(p_beta))
+bar
+#write_csv(bar,file = "high_achievers_century.csv")
+```
+
+
+\vspace{12pt}
+At each era we now calculate the $P(X \leq x \mid p)$ and $P(X \geq x \mid p)$ where:
+
+1. $X$ is the number of top 50 bios at or before the specified era, and $x$ is the observed value. $X \sim \text{Binomial(50, p)}$.
+2. The proportion $p$ is the proportion of the cumulative historical population at or the specified era. 
+
+We calculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with centuries to define distinct eras and the top 50 raw unadjusted Pantheon ranking list. The plot indicates that the Pantheon ranking list exhibits favoritism for historical figures at or prior to 600 AD with massive favoritism for historical figures at or prior to 0 AD. The era-adjusted rankings obtained via Full House Modeling do not exhibit preferential biases to historical figures from any era.
+\vspace{12pt}
+
+```{r, echo = FALSE}
+top50 = hpi_adjust_vs_peers %>% as.data.frame() %>% head(50)
+top50_Pantheon = persons2020_small %>% arrange(desc(hpi)) %>% slice(1:50)
+
+## number of top 50 bios at or before generation x
+x_lower = sapply(gen_stats$gen_end, function(x){
+  sum(top50$birthyear <= x )
+}) 
+x_lower_Pantheon = sapply(gen_stats$gen_end, function(x){
+  sum(top50_Pantheon$birthyear <= x )
+}) 
+
+data_membership = 
+  data.frame(
+    gen_start = generations,
+    gen_end = c(generations[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(generations), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population[j]))
+    }),   
+    chance_less = 1 / sapply(seq_along(generations), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population[j]))
+    }), 
+    ## Prob(X >= x | p) for each generation
+    prob_more = sapply(seq_along(generations), function(j) {
+        sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population[j]))
+      }), 
+    chance_more = 1 / sapply(seq_along(generations), function(j) {
+      sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population[j]))
+    })
+  )
+
+data_membership_probs = data_membership %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_chances = data_membership %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_Pantheon = 
+  data.frame(
+    gen_start = generations,
+    gen_end = c(generations[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(generations), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population[j]))
+    }),
+    chance_less = 1 / sapply(seq_along(generations), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population[j]))
+    }),
+    ## Prob(X >= x | p) and chance for each generation
+    prob_more = sapply(seq_along(generations), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population[j]))
+    }),
+    chance_more = 1 / sapply(seq_along(generations), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population[j]))
+    })
+  )
+
+data_membership_Pantheon_probs = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_Pantheon_chances = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_chances_both = rbind(
+  data_membership_chances %>% mutate(Pantheon = 0),
+  data_membership_Pantheon_chances %>% mutate(Pantheon = 1)
+)
+saveRDS(data_membership_chances_both,file = "membership_chances_both.RDS")
+
+ggplot(data_membership_chances_both, 
+       aes(x = gen_end, y = log10(value), col = type)) + 
+  geom_line() + 
+  geom_hline(yintercept = log10(20), linetype = 2) + 
+  facet_wrap(~ Pantheon, 
+             labeller = labeller(Pantheon = c("0" = "vs one's peers",
+                                              "1" = "Pantheon")
+                                 )
+             )+ 
+  xlab("year") + 
+  ylab("log10 chance extreme") + 
+  scale_x_continuous(breaks = seq(-600, 1800, by = 600)) + 
+  theme_minimal(base_size = 16)
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+pdf("FHM-vs-Pantheon-representation.pdf")
+ggplot(data_membership_chances_both,
+       aes(x = gen_end, y = log10(value), col = type)) +
+  geom_line() +
+  geom_hline(yintercept = log10(20), linetype = 2) +
+  facet_wrap(~ Pantheon,
+             labeller = labeller(Pantheon = c("0" = "vs one's peers",
+                                              "1" = "Pantheon")
+                                 )
+             )+
+  xlab("year") +
+  ylab("log10 chance extreme") +
+  scale_x_continuous(breaks = seq(-600, 1800, by = 600)) +
+  theme_minimal(base_size = 16)
+dev.off()
+```
+
+
+
+## Eras defined as separate chapters in a history course
+
+We now in consider Full House Modeling when a history course is used to define distinct eras. First, the number of extreme observations $k$ is calculated. In this analysis, we will let $k = \lfloor1.3\sqrt n \rfloor$, the lower bound of the range for $k$ in [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf). This value of $k$ was chosen so that our tail probability modeling fits the data well (see the eight plots below).
+
+\vspace{12pt}
+
+```{r k-compute-ystarstar-hist, cache = TRUE}
+system.time({
+  kmat_hist = do.call(rbind, mclapply(seq_along(hpi_generations_hist), 
+    FUN = function(j) {
+      k_finder(x = hpi_generations_hist[[j]] %>% pull(hpi))  
+    }, mc.cores = nCores))  
+})
+```
+
+```{r}
+kmat_hist[, -1] = t(apply(kmat_hist, 1, function(x) c(min(x[-1]), max(x[-1]))))
+kmat_hist
+```
+
+\vspace{12pt}
+We now calculate $y^{\star\star}$ and modeling information quantities through a call to the \texttt{compute\_ystarstar} function.
+\vspace{12pt}
+
+```{r compute-ystarstar-hist, cache = TRUE}
+system.time({
+  out = mclapply(seq_along(hpi_generations_hist), 
+    FUN = function(j) { 
+      compute_ystarstar(x = hpi_generations_hist[[j]] %>% pull(hpi), 
+                        #k = kmat_hist[j, 1])
+                        k = kmat_hist[j, 2])
+      }, 
+    mc.cores = nCores)
+})
+
+## get ystarstar values
+ystar_mat_hist = do.call(rbind, lapply(seq_along(hpi_generations_hist), 
+  function(j) out[[j]]$ystar )
+)
+ystar_mat_hist
+```
+
+
+\vspace{12pt}
+We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
+\vspace{12pt}
+
+
+```{r}
+par(mfrow = c(2,2))
+for(j in 1:4){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,2))
+for(j in 5:8){
+  plot(out[[j]]$W, out[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out[[j]]$W, predict(out[[j]]$model))  
+}
+```
+
+
+
+\vspace{12pt}
+We now compute latent talent estimates using Full House Modeling and the stored $y^{\star\star}$ values via the \texttt{talent\_computing\_nonpara} function.
+
+
+\vspace{12pt}
+
+```{r talent-scores-hist, cache = TRUE}
+system.time({
+  hpi_adjust_hist =
+    do.call(rbind,
+      mclapply(seq_along(hpi_generations_hist),
+        mc.cores = nCores, function(j){
+          cbind(hpi_generations_hist[[j]], 
+                           "hpi_talent" = 
+                  talent_computing_nonpara(ystar = as.numeric(ystar_mat_hist[j, 1]),
+                                   y = hpi_generations_hist[[j]] %>% pull(hpi),
+                                   npop = Epop_generations_hist[[j]]))
+          }))
+})
+```
+
+
+\vspace{12pt}
+Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 8 distinct eras defined using a history course as a guide.
+\vspace{12pt}
+
+```{r}
+hpi_adjust_hist = hpi_adjust_hist %>% arrange(desc(hpi_talent))
+hpi_adjust_hist %>% as.data.frame() %>% head(50)
+#write_csv(hpi_adjust_hist, "hpi_adjust_hist.csv")
+```
+
+
+\vspace{12pt}
+We now display some information on the components of Full House modeling. In the table below, we report: 
+
+1. The difference that the highest achiever stood out from the next highest, $Y_{i, (n_i)} - Y_{i(n_i-1)}$.
+2. The number of memorable people in the era, $n_i$.
+3. The upper bound $Y_i^{\star\star}$.
+4. The realized Beta value $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$.
+5. The percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. This is a measure of how far the highest achiever stood from their peers.
+
+\vspace{12pt}
+
+
+```{r}
+foo_hist = data.frame(diff = sapply(hpi_generations_hist, function(x){
+  -head(x %>% pull(hpi) %>% diff(), 1)}),
+  n = sapply(hpi_generations_hist, nrow), 
+  yss = ystar_mat_hist) %>% 
+  mutate(balance = (diff/2)/((diff/2) + yss),
+         U_beta = 1 - 1/n + 1/n * (diff/2)/((diff/2) + yss),
+         p_beta = pbeta(U_beta, n, 1), 
+         group = seq_along(hpi_generations_hist))
+foo
+```
+
+\vsapce{12pt}
+Below are the highest achievers in each era as judged by the percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. 
+\vspace{12pt}
+
+```{r}
+bar_hist = cbind(foo_hist, do.call(rbind, 
+  lapply(seq_along(hpi_generations_hist), 
+         function(j) hpi_generations_hist[[j]][1, ]))) %>% 
+  select(name, birthyear, hpi, diff, yss, balance, p_beta) %>% 
+  mutate(across(hpi:p_beta, ~round(.x, 3))) %>% 
+  arrange(desc(p_beta))
+bar_hist
+```
+
+\vspace{12pt}
+At each era we now calculate the $P(X \leq x \mid p)$ and $P(X \geq x \mid p)$ where:
+
+1. $X$ is the number of top 50 bios at or before the specified era, and $x$ is the observed value. $X \sim \text{Binomial(50, p)}$.
+2. The proportion $p$ is the proportion of the cumulative historical population at or the specified era. 
+
+We calculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with units in a history class to define distinct eras and the top 50 raw unadjusted Pantheon ranking list. The plot indicates that the Pantheon ranking list exhibits a minor lack of favoritism over several time periods. 
+\vspace{12pt}
+
+
+```{r, echo = FALSE}
+top50_hist = hpi_adjust_hist %>% as.data.frame() %>% head(50)
+top50_Pantheon = persons2020_small_hist %>% arrange(desc(hpi)) %>% slice(1:50)
+
+x_lower = sapply(c(-34:20 * 100), function(x){
+  sum(top50_hist$birthyear <= x )
+}) 
+x_lower_Pantheon = sapply(c(-34:20 * 100), function(x){
+  sum(top50_Pantheon$birthyear <= x )
+}) 
+
+pops = dat_HPI_eligible %>% 
+  filter(year %in% c(c(-35:19 * 100), 1980)) %>% 
+  pull(cumulative_population) %>% diff()
+cum_prop_population_hist = cumsum(pops) / sum(pops)
+
+data_membership = 
+  data.frame(
+    gen_start = c(-35:19 * 100),
+    gen_end = c(c(-35:19 * 100)[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),   
+    chance_less = 1 / sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population_hist[j]))
+    }), 
+    ## Prob(X >= x | p) for each generation
+    prob_more = sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    }), 
+    chance_more = 1 / sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    })
+  )
+
+data_membership_probs = data_membership %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_chances = data_membership %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_Pantheon = 
+  data.frame(
+    gen_start = c(-35:19 * 100),
+    gen_end = c(c(-35:19 * 100)[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    chance_less = 1 / sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    ## Prob(X >= x | p) and chance for each generation
+    prob_more = sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    chance_more = 1 / sapply(seq_along(c(-35:19 * 100)), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    })
+  )
+
+
+data_membership_Pantheon_probs = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_Pantheon_chances = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_chances_both = rbind(
+  data_membership_chances %>% mutate(Pantheon = 0),
+  data_membership_Pantheon_chances %>% mutate(Pantheon = 1)
+)
+saveRDS(data_membership_chances_both,file="membership_chances_both_history.RDS")
+
+ggplot(data_membership_chances_both, 
+       aes(x = gen_end, y = value, col = type)) + 
+  geom_line() + 
+  geom_hline(yintercept = 20, linetype = 2) + 
+  facet_wrap(~ Pantheon, 
+             labeller = labeller(Pantheon = c("0" = "history course",
+                                              "1" = "Pantheon")
+             )
+  )+ 
+  xlab("year") + 
+  ylab("chance extreme") + 
+  scale_x_continuous(breaks = seq(-3500, 2000, by = 500), minor_breaks = NULL, 
+                     guide = guide_axis(angle = 90)) + 
+  theme_minimal(base_size = 16)
+```
+
+
+
+```{r, echo=FALSE, message=FALSE}
+pdf("FHM-vs-Pantheon-representation-hist-full-range.pdf")
+ggplot(data_membership_chances_both, 
+       aes(x = gen_end, y = value, col = type)) + 
+  geom_line() + 
+  geom_hline(yintercept = 20, linetype = 2) + 
+  facet_wrap(~ Pantheon, 
+             labeller = labeller(Pantheon = c("0" = "history course",
+                                              "1" = "Pantheon")
+             )
+  )+ 
+  xlab("year") + 
+  ylab("chance extreme") + 
+  scale_x_continuous(breaks = seq(-3500, 2000, by = 500), minor_breaks = NULL, 
+                     guide = guide_axis(angle = 90)) + 
+  theme_minimal(base_size = 16)
+dev.off()
+```
+
+
+\vspace{12pt}
+It is worth noting that the above analysis includes the full range of years in the Pantheon data set, but the earliest birthdate in either top 50 list is 2000 BC. We recalculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with units in a history class to define distinct eras and the top 50 raw unadjusted Pantheon ranking list restricted to 2000 BC - 1980 AD. The plot indicates that both methods exhibit favoritism to older era historical figures.
+\vspace{12pt}
+
+
+```{r, echo = FALSE}
+top50_hist = hpi_adjust_hist %>% as.data.frame() %>% head(50)
+top50_Pantheon = persons2020_small_hist %>% arrange(desc(hpi)) %>% slice(1:50)
+
+x_lower = sapply(c(-19:20 * 100), function(x){
+  sum(top50_hist$birthyear <= x )
+}) 
+x_lower_Pantheon = sapply(c(-19:20 * 100), function(x){
+  sum(top50_Pantheon$birthyear <= x )
+}) 
+
+pops = dat_HPI_eligible %>% 
+  filter(year %in% c(c(-20:19 * 100), 1980)) %>% 
+  pull(cumulative_population) %>% diff()
+cum_prop_population_hist = cumsum(pops) / sum(pops)
+
+data_membership = 
+  data.frame(
+    gen_start = c(-20:19 * 100),
+    gen_end = c(c(-20:19 * 100)[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),   
+    chance_less = 1 / sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower[j], size = 50, prob = cum_prop_population_hist[j]))
+    }), 
+    ## Prob(X >= x | p) for each generation
+    prob_more = sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    }), 
+    chance_more = 1 / sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(x_lower[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    })
+  )
+
+data_membership_probs = data_membership %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_chances = data_membership %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_Pantheon = 
+  data.frame(
+    gen_start = c(-20:19 * 100),
+    gen_end = c(c(-20:19 * 100)[-1]-1, 1980),
+    ## Prob(X <= x | p) and chances for each generation
+    prob_less = sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    chance_less = 1 / sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(0:x_lower_Pantheon[j], size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    ## Prob(X >= x | p) and chance for each generation
+    prob_more = sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    }),
+    chance_more = 1 / sapply(seq_along(c(-20:19 * 100)), function(j) {
+      sum(dbinom(x_lower_Pantheon[j]:50, size = 50, prob = cum_prop_population_hist[j]))
+    })
+  )
+
+
+data_membership_Pantheon_probs = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(prob_less, prob_more), 
+               names_to = "type", 
+               values_to = "value") 
+data_membership_Pantheon_chances = data_membership_Pantheon %>% 
+  pivot_longer(cols = c(chance_less, chance_more), 
+               names_to = "type", 
+               values_to = "value")
+
+data_membership_chances_both = rbind(
+  data_membership_chances %>% mutate(Pantheon = 0),
+  data_membership_Pantheon_chances %>% mutate(Pantheon = 1)
+)
+saveRDS(data_membership_chances_both,file="membership_chances_both_restricted.RDS")
+ggplot(data_membership_chances_both, 
+       aes(x = gen_end, y = value, col = type)) + 
+  geom_line() + 
+  geom_hline(yintercept = 20, linetype = 2) + 
+  facet_wrap(~ Pantheon, 
+             labeller = labeller(Pantheon = c("0" = "history course",
+                                              "1" = "Pantheon")
+             )
+  )+ 
+  xlab("year") + 
+  ylab("chance extreme") + 
+  scale_x_continuous(breaks = seq(-3500, 2000, by = 500), minor_breaks = NULL, 
+                     guide = guide_axis(angle = 90)) + 
+  theme_minimal(base_size = 16)
+?scale_x_continuous
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+pdf("FHM-vs-Pantheon-representation-hist-restricted-range.pdf")
+ggplot(data_membership_chances_both, 
+       aes(x = gen_end, y = value, col = type)) + 
+  geom_line() + 
+  geom_hline(yintercept = 20, linetype = 2) + 
+  facet_wrap(~ Pantheon, 
+             labeller = labeller(Pantheon = c("0" = "history course",
+                                              "1" = "Pantheon")
+             )
+  )+ 
+  xlab("year") + 
+  ylab("chance extreme") + 
+  scale_x_continuous(breaks = seq(-3500, 2000, by = 500), minor_breaks = NULL, 
+                     guide = guide_axis(angle = 90)) + 
+  theme_minimal(base_size = 16)
+dev.off()
+```
+
+
+# Comparison of approaches
+
+We now investigate how our era-adjusted rankings of historical figures compare with the original Pantheon ranking list. The plots below show agreement proportion as a function of the number of top biographies. For ranking lists displaying the top 100 or fewer biographies, our approach which defined eras by centuries exhibits much less agreement with the Pantheon ranking list than the approach which defined eras as separate units in a history course. The opposite is observed after the number of top biographies exceeds 100. Recall that our two era-adjustment methods were applied to data sets with different date ranges, and are therefore compared to different Pantheon ranking lists.
+
+
+```{r, echo = FALSE}
+rank_agreement = function(number) {
+  c(hist = length(which((hpi_adjust_hist %>%
+                as.data.frame() %>%
+                head(number) %>%
+                pull(name)) %in% (persons2020_small_hist %>% head(number) %>% pull(name)))),
+    peers = length(which((hpi_adjust_vs_peers %>%
+                as.data.frame() %>%
+                head(number) %>%
+                pull(name)) %in% (persons2020_small %>% head(number) %>% pull(name)))))
+}
+
+
+ranks = data.frame(
+  top = 1:20 * 5,
+  do.call(rbind, lapply(1:20 * 5, rank_agreement))
+) %>%
+  mutate(prop_hist = hist / top,
+         prop_peers = peers / top)
+
+ranks_long = ranks %>%
+  pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
+  mutate(props = as.factor(props))
+levels(ranks_long$props) = c("history class", "vs one's peers")
+
+ggplot(ranks, aes(x = top)) +
+  geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
+  geom_smooth(aes(x = top, y = prop_peers), se = FALSE) +
+  #geom_line(aes(x = top, y = prop_hist), color = "red") +
+  #geom_line(aes(x = top, y = prop_peers), color = "blue") +
+  theme_minimal(base_size = 16) +
+  labs(title = "Proprtion of membership in Pantheon list",
+       subtitle = "Comparison of vs one's peers and history class era definitions",
+       x = "top x in Pantheon list",
+       y = "proportion of agreement with Pantheon list") +
+  ylim(0, 1) +
+  geom_line(data = ranks_long, aes(x = top, y = value, color = props)) +
+  scale_colour_manual(values = c("red", "blue"), name = "era definition")
+
+ranks = data.frame(
+  top = 1:100 * 5,
+  do.call(rbind, lapply(1:100 * 5, rank_agreement))
+) %>%
+  mutate(prop_hist = hist / top,
+         prop_peers = peers / top)
+
+ranks_long = ranks %>%
+  pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
+  mutate(props = as.factor(props))
+levels(ranks_long$props) = c("history class", "vs one's peers")
+
+ggplot(ranks, aes(x = top)) +
+  geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
+  geom_smooth(aes(x = top, y = prop_peers), se = FALSE) +
+  #geom_line(aes(x = top, y = prop_hist), color = "red") +
+  #geom_line(aes(x = top, y = prop_peers), color = "blue") +
+  theme_minimal(base_size = 16) +
+  labs(title = "Proprtion of membership in Pantheon list",
+       subtitle = "Comparison of vs one's peers and history class era definitions",
+       x = "top x in Pantheon list",
+       y = "proportion of agreement with Pantheon list") +
+  ylim(0, 1) +
+  geom_line(data = ranks_long, aes(x = top, y = value, color = props)) +
+  scale_colour_manual(values = c("red", "blue"), name = "era definition")
+```
+
+
+
+```{r, echo = FALSE, message=FALSE}
+pdf("comparison-of-approaches-top-100.pdf")
+rank_agreement = function(number) {
+  c(hist = length(which((hpi_adjust_hist %>%
+                as.data.frame() %>%
+                head(number) %>%
+                pull(name)) %in% (persons2020_small_hist %>% head(number) %>% pull(name)))),
+    peers = length(which((hpi_adjust_vs_peers %>%
+                as.data.frame() %>%
+                head(number) %>%
+                pull(name)) %in% (persons2020_small %>% head(number) %>% pull(name)))))
+}
+
+
+ranks = data.frame(
+  top = 1:20 * 5,
+  do.call(rbind, lapply(1:20 * 5, rank_agreement))
+) %>%
+  mutate(prop_hist = hist / top,
+         prop_peers = peers / top)
+
+ranks_long = ranks %>%
+  pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
+  mutate(props = as.factor(props))
+levels(ranks_long$props) = c("history class", "vs one's peers")
+# saveRDS(ranks,file="ranks.RDS")
+ggplot(ranks, aes(x = top)) +
+  geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
+  geom_smooth(aes(x = top, y = prop_peers), se = FALSE) +
+  #geom_line(aes(x = top, y = prop_hist), color = "red") +
+  #geom_line(aes(x = top, y = prop_peers), color = "blue") +
+  theme_minimal(base_size = 16) +
+  labs(title = "Proprtion of membership in Pantheon list (top 100)",
+       subtitle = "Comparison of vs one's peers and history class era definitions",
+       x = "top x in Pantheon list",
+       y = "proportion of agreement with Pantheon list") +
+  ylim(0, 1) +
+  geom_line(data = ranks_long, aes(x = top, y = value, color = props)) +
+  scale_colour_manual(values = c("red", "blue"), name = "era definition")
+dev.off()
+```
+
+
+```{r, echo = FALSE, message=FALSE}
+ranks = data.frame(
+  top = 1:100 * 5,
+  do.call(rbind, lapply(1:100 * 5, rank_agreement))
+) %>%
+  mutate(prop_hist = hist / top,
+         prop_peers = peers / top)
+
+ranks_long = ranks %>%
+  pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
+  mutate(props = as.factor(props))
+levels(ranks_long$props) = c("history class", "vs one's peers")
+saveRDS(ranks,file="ranks500.RDS")
+pdf("comparison-of-approaches-top-500.pdf")
+ggplot(ranks, aes(x = top)) +
+  geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
+  geom_smooth(aes(x = top, y = prop_peers), se = FALSE) +
+  #geom_line(aes(x = top, y = prop_hist), color = "red") +
+  #geom_line(aes(x = top, y = prop_peers), color = "blue") +
+  theme_minimal(base_size = 16) +
+  labs(title = "Proprtion of membership in Pantheon list (top 500)",
+       subtitle = "Comparison of vs one's peers and history class era definitions",
+       x = "top x in Pantheon list",
+       y = "proportion of agreement with Pantheon list") +
+  ylim(0, 1) +
+  geom_line(data = ranks_long, aes(x = top, y = value, color = props)) +
+  scale_colour_manual(values = c("red", "blue"), name = "era definition")
+dev.off()
+```
+
+
+# Interesting changes in rankings
+
+We have already discussed how each era-adjusted rankings of historical figures agree with the original Pantheon ranking list, and the differences in historical figures included in each top 50 list. Here we take a closer look at how ranking lists change when era-adjustment is applied.
+
+## Eras defined as "vs one's peers"
+
+```{r movement_vs_peers, cache = TRUE}
+foo_vs_peers = cbind(
+paste(hpi_adjust_vs_peers$name, 
+      hpi_adjust_vs_peers$occupation, 
+      hpi_adjust_vs_peers$birthyear, sep = " "),
+paste(persons2020_small$name, 
+      persons2020_small$occupation, 
+      persons2020_small$birthyear, sep = " "))
+
+combined_vs_peers = data.frame(name = hpi_adjust_vs_peers$name, 
+                      occupation = hpi_adjust_vs_peers$occupation, 
+                      birthyear = hpi_adjust_vs_peers$birthyear,
+                      rank_vs_peers = 1:nrow(hpi_adjust_vs_peers), 
+                      rank_Pantheon = sapply(foo_vs_peers[, 1], function(x) {
+                        which(foo_vs_peers[, 2] == x)
+                        }))
+rownames(combined_vs_peers) = c()
+```
+
+
+The tables in this section display historical figures that are elevated or penalized by era-adjustment when eras are defined by centuries. Each code block below will output two tables. The first table will be the 10 historical figures most elevated from the top-x ranking list after era adjustment is applied. The second table will be the 10 historical figures from the top-x Pantheon list most penalized by era-adjustment.
+
+
+```{r}
+# top 50 
+## elevated by era-adjustment
+combined_vs_peers[1:50, ] %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_vs_peers %>% 
+  arrange(rank_Pantheon) %>% 
+  head(50) %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+library(xtable)
+xtable(rbind(
+combined_vs_peers[1:50, ] %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(desc(diff)) %>% 
+  head(10),
+## penalized by era-adjustment
+combined_vs_peers %>% 
+  arrange(rank_Pantheon) %>% 
+  head(50) %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(diff) %>% 
+  head(10)))
+```
+
+
+
+```{r}
+# top 250 
+## elevated by era-adjustment
+combined_vs_peers[1:250, ] %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_vs_peers %>% 
+  arrange(rank_Pantheon) %>% 
+  head(250) %>%   
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+# top 1000
+## elevated by era-adjustment
+combined_vs_peers[1:1000, ] %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_vs_peers %>% 
+  arrange(rank_Pantheon) %>% 
+  head(1000) %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+## all
+## elevated by era-adjustment
+combined_vs_peers %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_vs_peers %>% 
+  mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+## Eras defined as separate chapters in a history course
+
+The tables in this section display historical figures that are elevated or penalized by era-adjustment when eras are defined by separate chapters in a history course. Each code block below will output two tables. The first table will be the 10 historical figures most elevated from the top-x ranking list after era adjustment is applied. The second table will be the 10 historical figures from the top-x Pantheon list most penalized by era-adjustment.
+
+```{r movement_hist, cache = TRUE}
+foo_hist = cbind(
+paste(hpi_adjust_hist$name, 
+      hpi_adjust_hist$occupation, 
+      hpi_adjust_hist$birthyear, sep = " "),
+paste(persons2020_small_hist$name, 
+      persons2020_small_hist$occupation, 
+      persons2020_small_hist$birthyear, sep = " "))
+
+combined_hist = data.frame(name = hpi_adjust_hist$name, 
+                      occupation = hpi_adjust_hist$occupation, 
+                      birthyear = hpi_adjust_hist$birthyear,
+                      rank_hist = 1:nrow(hpi_adjust_hist), 
+                      rank_Pantheon = sapply(foo_hist[, 1], function(x) {
+                        which(foo_hist[, 2] == x)
+                        }))
+rownames(combined_hist) = c()
+```
+
+
+```{r}
+# top 50 
+## elevated by era-adjustment
+combined_hist[1:50, ] %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_hist %>% 
+  arrange(rank_Pantheon) %>% 
+  head(50) %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+xtable(rbind(combined_hist[1:50, ] %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(desc(diff)) %>% 
+  head(10), 
+## penalized by era-adjustment
+combined_hist %>% 
+  arrange(rank_Pantheon) %>% 
+  head(50) %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(diff) %>% 
+  head(10)))
+```
+
+
+```{r}
+# top 250 
+## elevated by era-adjustment
+combined_hist[1:250, ] %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_hist%>% 
+  arrange(rank_Pantheon) %>% 
+  head(250) %>%
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+# top 1000 
+## elevated by era-adjustment
+combined_hist[1:1000, ] %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_hist%>% 
+  arrange(rank_Pantheon) %>% 
+  head(1000) %>%
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
+
+
+```{r}
+# all
+## elevated by era-adjustment
+combined_hist %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(desc(diff)) %>% 
+  head(10)
+## penalized by era-adjustment
+combined_hist%>% 
+  arrange(rank_Pantheon) %>% 
+  mutate(diff = rank_Pantheon - rank_hist) %>% 
+  arrange(diff) %>% 
+  head(10)
+```
