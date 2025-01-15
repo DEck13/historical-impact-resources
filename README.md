@@ -1,1 +1,10 @@
-# historical-impact-resources
+# Supplemental materials for our era-adjusted historical impact statistics
+
+Era adjustment is made via [Full House Modeling](https://arxiv.org/abs/2207.11332). This model computes era-adjusted statistics through a principled balancing of the impact a historical figure had vs their contemporaries, as judged by [HPI](https://pantheon.world/data/faq), and the size of the eligible population.
+
+## Version 1.0 
+
+- Here is a reproducible technical report containing the steps for creating our data set for the eligible historical populations that are used in our analyses.
+- Here is a reproducible technical report containg the steps the we used to obtain era-adjusted rankings of the impact of historical figures. Additional results and analyses are also provided. 
+- Here is a link to the *fullhouse* R package. 
+
