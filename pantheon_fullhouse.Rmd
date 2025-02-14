@@ -349,7 +349,7 @@ Here, $Y^*_i$ is the value to construct the lower bound and $Y^{**}_i$ is the va
   \sum_{j=1}^{n_i}\left(\frac{j-1}{n_i} + \frac{t-\widetilde{Y}_{i,(j)}}{n_i\left(\widetilde{Y}_{i,(j+1)}-\widetilde{Y}_{i,(j)}\right)}\right) 1\left(\widetilde{Y}_{i,(j)} \leq t<\widetilde{Y}_{i,(j+1)}\right)+1\left(t \geq \widetilde{Y}_{i,(n_i+1)}\right).
 \end{equation}
 
-## Eras defined as "vs one's peers"
+## Eras defined by Centuries
 
 We first compute $y^{\star\star}$ using the \texttt{compute\_ystarstar} function in the \texttt{fullhouse} package. First, the number of extreme observations $k$ is calculated following a similar approach to that outlined in Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332) and Section 5 of [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf) which is implemented in the \texttt{k\_finder} function in the \texttt{fullhouse} package. 
 
@@ -515,7 +515,10 @@ Here is the top 50 list of the most impactful people in history ranked by estima
 \vspace{12pt}
 
 ```{r}
-hpi_adjust_vs_peers %>% as.data.frame() %>% head(50)
+kable(hpi_adjust_vs_peers %>% as.data.frame() %>% head(50), 
+      format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 #write_csv(hpi_adjust_vs_peers, "hpi_adjust_vs_peers.csv")
 ```
 
@@ -665,7 +668,7 @@ ggplot(data_membership_chances_both,
   geom_line() + 
   geom_hline(yintercept = log10(20), linetype = 2) + 
   facet_wrap(~ Pantheon, 
-             labeller = labeller(Pantheon = c("0" = "vs one's peers",
+             labeller = labeller(Pantheon = c("0" = "Centuries",
                                               "1" = "Pantheon")
                                  )
              )+ 
@@ -683,7 +686,7 @@ ggplot(data_membership_chances_both,
   geom_line() +
   geom_hline(yintercept = log10(20), linetype = 2) +
   facet_wrap(~ Pantheon,
-             labeller = labeller(Pantheon = c("0" = "vs one's peers",
+             labeller = labeller(Pantheon = c("0" = "Centuries",
                                               "1" = "Pantheon")
                                  )
              )+
@@ -792,7 +795,9 @@ Here is the top 50 list of the most impactful people in history ranked by estima
 
 ```{r}
 hpi_adjust_hist = hpi_adjust_hist %>% arrange(desc(hpi_talent))
-hpi_adjust_hist %>% as.data.frame() %>% head(50)
+kable(hpi_adjust_hist %>% as.data.frame() %>% head(50), format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 #write_csv(hpi_adjust_hist, "hpi_adjust_hist.csv")
 ```
 
@@ -818,7 +823,7 @@ foo_hist = data.frame(diff = sapply(hpi_generations_hist, function(x){
          U_beta = 1 - 1/n + 1/n * (diff/2)/((diff/2) + yss),
          p_beta = pbeta(U_beta, n, 1), 
          group = seq_along(hpi_generations_hist))
-foo
+foo_hist
 ```
 
 \vsapce{12pt}
@@ -931,7 +936,7 @@ ggplot(data_membership_chances_both,
   geom_line() + 
   geom_hline(yintercept = 20, linetype = 2) + 
   facet_wrap(~ Pantheon, 
-             labeller = labeller(Pantheon = c("0" = "history course",
+             labeller = labeller(Pantheon = c("0" = "History class",
                                               "1" = "Pantheon")
              )
   )+ 
@@ -951,7 +956,7 @@ ggplot(data_membership_chances_both,
   geom_line() + 
   geom_hline(yintercept = 20, linetype = 2) + 
   facet_wrap(~ Pantheon, 
-             labeller = labeller(Pantheon = c("0" = "history course",
+             labeller = labeller(Pantheon = c("0" = "History class",
                                               "1" = "Pantheon")
              )
   )+ 
@@ -1054,7 +1059,7 @@ ggplot(data_membership_chances_both,
   geom_line() + 
   geom_hline(yintercept = 20, linetype = 2) + 
   facet_wrap(~ Pantheon, 
-             labeller = labeller(Pantheon = c("0" = "history course",
+             labeller = labeller(Pantheon = c("0" = "History class",
                                               "1" = "Pantheon")
              )
   )+ 
@@ -1074,7 +1079,7 @@ ggplot(data_membership_chances_both,
   geom_line() + 
   geom_hline(yintercept = 20, linetype = 2) + 
   facet_wrap(~ Pantheon, 
-             labeller = labeller(Pantheon = c("0" = "history course",
+             labeller = labeller(Pantheon = c("0" = "History class",
                                               "1" = "Pantheon")
              )
   )+ 
@@ -1141,7 +1146,7 @@ ranks = data.frame(
 ranks_long = ranks %>%
   pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
   mutate(props = as.factor(props))
-levels(ranks_long$props) = c("history class", "vs one's peers")
+levels(ranks_long$props) = c("History class", "Centuries")
 
 ggplot(ranks, aes(x = top)) +
   geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
@@ -1184,7 +1189,7 @@ ranks = data.frame(
 ranks_long = ranks %>%
   pivot_longer(cols = prop_hist:prop_peers, names_to = c("props")) %>%
   mutate(props = as.factor(props))
-levels(ranks_long$props) = c("history class", "vs one's peers")
+levels(ranks_long$props) = c("History class", "Centuries")
 # saveRDS(ranks,file="ranks.RDS")
 ggplot(ranks, aes(x = top)) +
   geom_smooth(aes(x = top, y = prop_hist), se = FALSE, color = "red") +
@@ -1193,7 +1198,7 @@ ggplot(ranks, aes(x = top)) +
   #geom_line(aes(x = top, y = prop_peers), color = "blue") +
   theme_minimal(base_size = 16) +
   labs(title = "Proprtion of membership in Pantheon list (top 100)",
-       subtitle = "Comparison of vs one's peers and history class era definitions",
+       subtitle = "Comparison of centuries and history class era definitions",
        x = "top x in Pantheon list",
        y = "proportion of agreement with Pantheon list") +
   ylim(0, 1) +
@@ -1224,7 +1229,7 @@ ggplot(ranks, aes(x = top)) +
   #geom_line(aes(x = top, y = prop_peers), color = "blue") +
   theme_minimal(base_size = 16) +
   labs(title = "Proprtion of membership in Pantheon list (top 500)",
-       subtitle = "Comparison of vs one's peers and history class era definitions",
+       subtitle = "Comparison of centuries and history class era definitions",
        x = "top x in Pantheon list",
        y = "proportion of agreement with Pantheon list") +
   ylim(0, 1) +
@@ -1266,21 +1271,28 @@ The tables in this section display historical figures that are elevated or penal
 ```{r}
 # top 50 
 ## elevated by era-adjustment
-combined_vs_peers[1:50, ] %>% 
+foo = combined_vs_peers[1:50, ] %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_vs_peers %>% 
+foo = combined_vs_peers %>% 
   arrange(rank_Pantheon) %>% 
   head(50) %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
-```{r}
+```{r, echo=FALSE, eval=FALSE}
 library(xtable)
 xtable(rbind(
 combined_vs_peers[1:50, ] %>% 
@@ -1301,49 +1313,70 @@ combined_vs_peers %>%
 ```{r}
 # top 250 
 ## elevated by era-adjustment
-combined_vs_peers[1:250, ] %>% 
+foo = combined_vs_peers[1:250, ] %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_vs_peers %>% 
+foo = combined_vs_peers %>% 
   arrange(rank_Pantheon) %>% 
   head(250) %>%   
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
 ```{r}
 # top 1000
 ## elevated by era-adjustment
-combined_vs_peers[1:1000, ] %>% 
+foo = combined_vs_peers[1:1000, ] %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_vs_peers %>% 
+foo = combined_vs_peers %>% 
   arrange(rank_Pantheon) %>% 
   head(1000) %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
 ```{r}
 ## all
 ## elevated by era-adjustment
-combined_vs_peers %>% 
+foo = combined_vs_peers %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_vs_peers %>% 
+foo = combined_vs_peers %>% 
   mutate(diff = rank_Pantheon - rank_vs_peers) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
@@ -1374,21 +1407,28 @@ rownames(combined_hist) = c()
 ```{r}
 # top 50 
 ## elevated by era-adjustment
-combined_hist[1:50, ] %>% 
+foo = combined_hist[1:50, ] %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_hist %>% 
+foo = combined_hist %>% 
   arrange(rank_Pantheon) %>% 
   head(50) %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
-```{r}
+```{r, echo=FALSE, eval=FALSE}
 xtable(rbind(combined_hist[1:50, ] %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(desc(diff)) %>% 
@@ -1406,48 +1446,69 @@ combined_hist %>%
 ```{r}
 # top 250 
 ## elevated by era-adjustment
-combined_hist[1:250, ] %>% 
+foo = combined_hist[1:250, ] %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_hist%>% 
+foo = combined_hist%>% 
   arrange(rank_Pantheon) %>% 
   head(250) %>%
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
 ```{r}
 # top 1000 
 ## elevated by era-adjustment
-combined_hist[1:1000, ] %>% 
+foo = combined_hist[1:1000, ] %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_hist%>% 
+foo = combined_hist%>% 
   arrange(rank_Pantheon) %>% 
   head(1000) %>%
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
 
 
 ```{r}
 # all
 ## elevated by era-adjustment
-combined_hist %>% 
+foo = combined_hist %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(desc(diff)) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+
 ## penalized by era-adjustment
-combined_hist%>% 
+foo = combined_hist%>% 
   arrange(rank_Pantheon) %>% 
   mutate(diff = rank_Pantheon - rank_hist) %>% 
   arrange(diff) %>% 
   head(10)
+kable(foo, format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
 ```
