@@ -3,9 +3,7 @@ title: "Technical Report: Full House Modeling for rankings of historical figures
 author: "Elisha Cohen, Adrian Burgos Jr., Shen Yan, and Daniel J. Eck"
 date: ""
 output:
-  html_document:
-    toc: true
-    toc_depth: 3    
+  html_document
 urlcolor: blue
 ---
 
@@ -21,11 +19,31 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 ```
 
 
-In this technical report we go through the steps that we took to rank historical figures via an era-neutral version of the Historical Popularity Index (HPI) in [Yu et al (2016)](https://www.nature.com/articles/sdata201575) obtained via Full House Modeling. This technical report is reproducible by anyone who has the fullhouse package and our data sets. Long code chunks that create plots will be suppressed. Code for these plots is available in the accompanying .Rmd file.
+In this technical report we go through the steps that we took to rank historical figures via an era-neutral version of the Historical Popularity Index (HPI) in [Yu et al (2016)](https://www.nature.com/articles/sdata201575) obtained via Full House Modeling. This technical report is reproducible by anyone who has the fullhouse package and our data sets. Long code chunks that create plots will be suppressed. Code for these plots is available in the accompanying .Rmd file. This report will cover the following topics:
+
+# List of Topics {#topics}
+
+- [Data Preparation](#Data): Data preprocessing steps and software
+- [Historical Eras](#Eras): Definition of eras used to construct the eligible population of historic figures
+  - [Eras Defined by Centuries](#Centuries): ie, all eligible people born during 1700-1799
+  - [Eras Defined as Separate Chapters in a History Course](#History): ie, all eligible people born during the Emergence of the First Global Age, 1450-1770 CE
+- [Full House Modeling](#FHM): Definition, implementation, diagnostics, and results of Full House Modeling
+  - [Eras Defined by Centuries](#FHM-Centuries): Full House Modeling when eras are defined by centuries
+  - [Eras Defined as Separate Chapters in a History Course](#FHM-History): Full House Modeling when eras are defined by chapters in a history course
+- [Comparison of Approaches](#Comparison): Comparison of rankings obtained from HPI and versions of era-adjusted HPI
+- [Interesting Changes in Rankings](#Changes): Additional interesting rankings changes between HPI and versions of era-adjusted HPI
+  - [Eras Defined as Centuries](#Changes-Centuries): Interesting changes in rankings when switching from HPI to era-adjusted HPI with eras defined by centuries
+  - [Eras Defined as Separate Chapters in a History Course](#Changes-History): Interesting changes in rankings when switching from HPI to era-adjusted HPI with eras defined by chapters in a history course
+- [Sensitivity in Eligible Population](#Sensitivity-Eligible): Investigations into the sensitivity of the eligible population when eras are defined by centuries
+  - [Linear Increase in Eligible Population](#Linear-Increase): Eligible population increases linearly
+  - [Flat Increase in Eligible Population](#Flat-Increase): Eligible population increases linearly but is mostly flat
+
+
+# Data Preparation {#Data}
 
 Population data collection is through 05/17/2022. The Pantheon data used is the [2020 Person Dataset version 2.0](https://pantheon.world/data/datasets). We load in the following software packages:
 
-\vspace{12pt}
+
 ```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(parallel)
@@ -40,9 +58,9 @@ nCores = detectCores() - 2
 nCores
 ```
 
-\vspace{12pt}
+
 We load in the data sets used in this analysis:
-\vspace{12pt}
+
 
 ```{r}
 ## estimate of historical eligible population
@@ -51,49 +69,37 @@ dat_HPI_eligible = read_csv("dat_HPI_eligible.csv")
 persons2020 = read_csv("person_2020_update.csv")
 ```
 
-<!-- \vspace{12pt} -->
-<!-- We also source in supporting functions from source.R: -->
-<!-- \vspace{12pt} -->
-
-<!-- ```{r} -->
-<!-- source("source.R") -->
-<!-- ``` -->
-
-\vspace{12pt}
 
 We remove duplicates of bios with a common name and birth year.
 
-\vspace{12pt}
 
 ```{r}
 persons2020 = 
   persons2020 %>% distinct(name, birthyear, .keep_all = TRUE)
 ```
 
-\vspace{12pt}
 
-We change Donald Trump's 2020 HPI value of 94.9 to his 2022 HPI value of 78.13. Our aim is to study the most impactful people in history. We do not think it proper to conduct our analyses with Donald Trump's popularity in 2020 when he has fallen 679 spots in two years.
+We change Donald Trump's 2020 HPI value of 94.9 to his 2022 HPI value of 78.13. Our aim is to study the most impactful people in history. We do not think it proper to conduct our analyses with Donald Trump's popularity in 2020 when he had fallen 679 spots in two years and is still living at the time of this analysis. While HPI is a proxy measure of impact through popularity, the intention of HPI is to correct recency biases. We felt it best to ignore an active historical figure whose current popularity might not be reflective of their historic popularity.
 
-\vspace{12pt}
 
 ```{r}
 persons2020 = persons2020 %>% 
   mutate(hpi = ifelse(name == "Donald Trump", 78.13, hpi)) %>% 
   arrange(desc(hpi))
 ```
+[Back to topics](#topics)
 
 
-# Historical eras
+# Historical eras {#Eras}
 
-We now define historical eras. Here the eras constitute a subpopulation of contemporaneous people. People within a common era are viewed as "competing against each other" for large HPI values. 
+We now define historical eras. Here the eras constitute a subpopulation of contemporaneous people. People within a common era are viewed as "competing against each other" for large HPI values. [Back to topics](#topics)
 
 
-## Eras defined as "vs one's peers"
+## Eras Defined by Centuries {#Centuries}
 
 Here we define eras to constitute a relatively narrow range of years. The most recent year in our analysis in 1980. The eras will be defined by the centuries, and we will only consider eras that have at least 50 people in the Pantheon data set. Our first era begins in 800 BC, the second begins in 700 BC, and so on.
 
 We will define Jesus's and other Christian figures' birth year to be 0 AD. This is done to separate memorable Christian figures from memorable Roman figures into different peer groups. We moved Jesus instead of Julius Ceasar and other Roman figures because [Jesus's birth year is not exactly known](https://en.wikipedia.org/wiki/Jesus).
-\vspace{12pt}
 
 
 ```{r}
@@ -111,10 +117,10 @@ persons2020_small = persons2020_small %>%
                      "Andrew the Apostle", "James, son of Alphaeus"), 9, group))
 ```
 
-\vspace{12pt}
+
 Before we begin our analysis we show HPI vs birthyear below. The red line indicates the 50th largest value of HPI. The grey rectangle indicates the period in time between 0 CE and 1162 CE (Genghis Kahn's birth).
 
-\vspace{12pt}
+
 ```{r}
 hpi_50 = persons2020_small %>% arrange(desc(hpi)) %>% slice(50:50) %>% pull(hpi)
 
@@ -133,13 +139,10 @@ persons2020_small %>%
 ```
 
 
-
-\vspace{12pt}
 We now split the Pantheon data set and historical eligible population data set into smaller chunks containing data for each separate era. Below are two important quantities: 
 
 1. **hpi\_generations**: This list contains the name, gender, birth year, and HPI value of individuals within the historical eras.
 2. **Epop\_generations**: This data set contains the the number of people that populate each era. This population is defined as the difference in the range of population tallies recorded for end points defining an era. The first era runs from 800 BC to right before 700 BC. The population of the era is the cumulative historical population at 700 BC minus the cumulative historical population at 800 BC.
-\vspace{12pt}
 
 
 ```{r}
@@ -165,9 +168,7 @@ data.frame(Epop_generations,
 ```
 
 
-\vspace{12pt}
 Below we display some information on each of the eras. We display the populations of an era, the cumulative proportion of the historical population through that era, and the number of Pantheon biographies in each era.
-\vspace{12pt}
 
 
 ```{r}
@@ -182,9 +183,9 @@ gen_stats = data.frame(
 gen_stats 
 ```
 
-\vspace{12pt}
+
 We now plot the eligible populations of the 28 eras constructed to define temporal peer groups.
-\vspace{12pt}
+
 
 ```{r}
 ggplot(gen_stats) + 
@@ -209,13 +210,14 @@ ggplot(gen_stats) +
         subtitle = "800 BC to 1980 AD")
 dev.off()
 ```
+[Back to topics](#topics)
 
 
-## Eras defined as separate chapters in a history course
+## Eras Defined as Separate Chapters in a History Course {#History}
 
 Here we define eras as separate chapters in a sensible world history course. There will be 9 eras which follow the periodization for world history section on [UCLA's Public History Initiative web page](https://phi.history.ucla.edu/nchs/preface/developing-standards/). The first era, The Beginnings of Human Society, dates before the Pantheon data set, so it will contain no bios. We lag birth year by 40 years so that people who populate each era are not children in this era-defining context. These eras are encoded here:
 
-\vspace{12pt}
+
 ```{r}
 # Era 1: The Beginnings of Human Society
 # Era 2: Early Civilizations and the Emergence of Pastoral Peoples, 4000-1000 BCE
@@ -245,9 +247,8 @@ persons2020_small_hist = persons2020 %>%
   mutate(era = era_assigner(birthyear))
 ```
 
-\vspace{12pt}
+
 We now split the Pantheon data set and historical eligible population data set into smaller chunks containing data for each separate era as done above.
-\vspace{12pt}
 
 
 ```{r}
@@ -262,7 +263,6 @@ Epop_generations_hist = dat_HPI_eligible %>%
   filter(year %in% generations_hist_by) %>% 
   pull(cumulative_population) %>% diff()
 
-
 foo = do.call(rbind, lapply(seq_along(hpi_generations_hist), function(group){
   cbind(hpi_generations_hist[[group]], Epop_generations_hist[[group]], group)
 }))
@@ -270,9 +270,7 @@ colnames(foo)[5] = "npop"
 ```
 
 
-\vspace{12pt}
 Below we display some information on each of the eras. We display the populations of an era, the cumulative proportion of the historical population through that era, and the number of Pantheon biographies in each era.
-\vspace{12pt}
 
 
 ```{r}
@@ -289,10 +287,7 @@ gen_stats_hist
 ```
 
 
-\vspace{12pt}
 We now plot the populations of the eight eras defined as separate chapters in a history course. 
-\vspace{12pt}
-
 
 
 ```{r}
@@ -330,12 +325,10 @@ ggplot(gen_stats_hist) +
         subtitle = "3500 BC to 1980 AD") 
 dev.off()
 ```
+[Back to topics](#topics)
 
 
-
-
-
-# Full House modeling
+# Full House Modeling {#FHM}
 
 Full House Modeling uses an interpolated empirical CDF $\widetilde{F}_{Y_i}$ as an estimate of the true distribution function for the $Y$ data as in [Yan (2023)](https://arxiv.org/abs/2207.11332). This estimator is constructed in the following manner: First, we construct surrogate sample points $\widetilde{Y}_{i,(1)}, \ldots, \widetilde{Y}_{i,(n_i+1)}$ as, 
 
@@ -348,12 +341,13 @@ Here, $Y^*_i$ is the value to construct the lower bound and $Y^{**}_i$ is the va
 \widetilde{F}_{Y_i}(t) = 
   \sum_{j=1}^{n_i}\left(\frac{j-1}{n_i} + \frac{t-\widetilde{Y}_{i,(j)}}{n_i\left(\widetilde{Y}_{i,(j+1)}-\widetilde{Y}_{i,(j)}\right)}\right) 1\left(\widetilde{Y}_{i,(j)} \leq t<\widetilde{Y}_{i,(j+1)}\right)+1\left(t \geq \widetilde{Y}_{i,(n_i+1)}\right).
 \end{equation}
+[Back to topics](#topics)
 
-## Eras defined by Centuries
+
+## Eras Defined by Centuries {#FHM-Centuries}
 
 We first compute $y^{\star\star}$ using the \texttt{compute\_ystarstar} function in the \texttt{fullhouse} package. First, the number of extreme observations $k$ is calculated following a similar approach to that outlined in Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332) and Section 5 of [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf) which is implemented in the \texttt{k\_finder} function in the \texttt{fullhouse} package. 
 
-\vspace{12pt}
 
 ```{r k-compute-ystarstar-peers, cache = TRUE}
 system.time({
@@ -368,7 +362,7 @@ system.time({
 kmat
 ```
 
-\vspace{12pt}
+
 The task of computing $y^{\star\star}$ is implemented in the \texttt{compute\_ystarstar} function which is included in the \texttt{fullhouse} package (called below). This function computes $y^{\star\star}$ in the following manner: we first calculate $k$ as above. The upper bound $Y_i^{**}$ is estimated through a connection between $\widetilde{F}_{Y_i}(Y_{i,(n_i)})$ and the regression fit on $(h(p_{i,j,.5,n_i}), Y_{i,(j)})$, $j = n_i -k + 1,\ldots,n_i$ where $h$ is a selected model in the tail probabilities. The tail probability models that we consider are:
 
  - logistic $(h(w) = a + bw + \epsilon)$,
@@ -381,8 +375,6 @@ where
 $$
   w = \log\left(\frac{p}{1-p}\right).
 $$
-
-
 
 With a model $h$ selected (more on this below), we find $Y_i^{**}$ as the solution of the following optimization problem 
 \begin{equation} \label{eq:optim}
@@ -398,7 +390,6 @@ We select a tail probability model via the following steps:
 4. Stop if the optimization problem \eqref{eq:optim} can be solved. 
 5. If the optimization problem \eqref{eq:optim} cannot be solved, then fit the logistic cubic model.
 
-\vspace{12pt}
 
 ```{r compute-ystarstar-peers, cache = TRUE}
 system.time({
@@ -417,13 +408,11 @@ ystar_mat = do.call(rbind, lapply(seq_along(hpi_generations),
 ```
 
 
-\vspace{12pt}
 In addition to $y^{\star\star}$, the \texttt{compute\_ystarstar} function includes the tail probability model and data used to fit the model for each era.
 
 The modeling of the $k$ tail probabilities (described above) closely follows Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332). However, there are some notable differences. The main difference is that the simple modeling approach in Section 2.2.3 of [Yan (2023)](https://arxiv.org/abs/2207.11332) does not work well for all eras that we consider. Namely, there is a problem with model fit in some circumstances and a value for $y^{\star\star}$ cannot be computed. Hence the expanded modeling class above. 
 
 We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
-\vspace{12pt}
 
 <!-- ```{r} -->
 <!-- lapply(1:28, function(j){ -->
@@ -461,7 +450,6 @@ for(j in 13:18){
 }
 ```
 
-
 ```{r}
 par(mfrow = c(2,3))
 for(j in 19:24){
@@ -470,7 +458,6 @@ for(j in 19:24){
   lines(out[[j]]$W, predict(out[[j]]$model))  
 }
 ```
-
 
 ```{r}
 par(mfrow = c(2,2))
@@ -482,17 +469,12 @@ for(j in 25:28){
 ```
 
 
-
-
-\vspace{12pt}
 We now compute latent talent estimates using Full House Modeling and the stored $y^{\star\star}$ values. This task is implemented in the \texttt{talent\_computing\_nonpara} function which is included in the \texttt{fullhouse} package and called below. These estimates of latent talent are
 $$
 	F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(\widetilde{F}_{Y_{i}}\left(Y_{i,(j)} \right)\right)\right) \approx F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(U_{i,(j)}\right)\right) = X_{i, (N_i - n_i + j)},
 $$
 where we suppose that $X_{i,j} \overset{iid}{\sim} \text{Pareto}(\alpha)$, $\alpha = 1.16$ (the value corresponding to the [Pareto principle](https://en.wikipedia.org/wiki/Pareto_principle)), $j = 1,\ldots,n_i$.
 
-
-\vspace{12pt}
 
 ```{r talent-scores-peers, cache = TRUE}
 ## vs your peers
@@ -510,9 +492,9 @@ system.time({
 })
 ```
 
-\vspace{12pt}
+
 Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 28 distinct eras defined by centuries to designate peer groups.
-\vspace{12pt}
+
 
 ```{r}
 kable(hpi_adjust_vs_peers %>% as.data.frame() %>% head(50), 
@@ -523,13 +505,10 @@ kable(hpi_adjust_vs_peers %>% as.data.frame() %>% head(50),
 ```
 
 
-
-\vspace{12pt}
 We now display some information on the components of Full House modeling. From [Yan (2023)](https://arxiv.org/abs/2207.11332) we have that
 $$
   \widetilde{F}_{Y_i}\left(Y_{i,(j)}\right) \approx U_{i,(j)},
 $$
-
 where $\approx$ means approximately distributed, and $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$. Notice that $\widetilde{F}_{Y_i}$ satisfies the following,
 \begin{align*}
   \widetilde{F}_{Y_i}\left(Y_{i,(n_i)}\right) 
@@ -538,7 +517,6 @@ where $\approx$ means approximately distributed, and $U_{i,(j)} \sim \operatorna
 \end{align*}
 Thus, how far someone stands above their peers is a balance between how far above their closest peer and the estimated maximum allowable value $Y_i^{\star\star}$ which is obtained from modeling of the tail probabilities of all the extreme performers. In this manner, increased spacing between successive extreme performers may offset the effect that  $Y_{i, (n_i)} - Y_{i(n_i-1)}$ has $\widetilde{F}_{Y_i}\left(Y_{i,(n_i)}\right)$ through an increase in $Y_i^{\star\star}$.
 
-
 In the table below, we report: 
 
 1. The difference that the highest achiever stood out from the next highest, $Y_{i, (n_i)} - Y_{i(n_i-1)}$.
@@ -546,8 +524,6 @@ In the table below, we report:
 3. The upper bound $Y_i^{\star\star}$.
 4. The realized Beta value $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$.
 5. The percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. This is a measure of how far the highest achiever stood from their peers.
-
-\vspace{12pt}
 
 
 ```{r}
@@ -561,10 +537,10 @@ foo = data.frame(diff = sapply(hpi_generations, function(x){
          group = seq_along(hpi_generations))
 foo
 ```
-
 \vsapce{12pt}
+
 Below are the highest achievers in each era as judged by the percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. 
-\vspace{12pt}
+
 
 ```{r}
 bar = cbind(foo, do.call(rbind, 
@@ -578,14 +554,13 @@ bar
 ```
 
 
-\vspace{12pt}
 At each era we now calculate the $P(X \leq x \mid p)$ and $P(X \geq x \mid p)$ where:
 
 1. $X$ is the number of top 50 bios at or before the specified era, and $x$ is the observed value. $X \sim \text{Binomial(50, p)}$.
 2. The proportion $p$ is the proportion of the cumulative historical population at or the specified era. 
 
 We calculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with centuries to define distinct eras and the top 50 raw unadjusted Pantheon ranking list. The plot indicates that the Pantheon ranking list exhibits favoritism for historical figures at or prior to 600 AD with massive favoritism for historical figures at or prior to 0 AD. The era-adjusted rankings obtained via Full House Modeling do not exhibit preferential biases to historical figures from any era.
-\vspace{12pt}
+
 
 ```{r, echo = FALSE}
 top50 = hpi_adjust_vs_peers %>% as.data.frame() %>% head(50)
@@ -696,14 +671,13 @@ ggplot(data_membership_chances_both,
   theme_minimal(base_size = 16)
 dev.off()
 ```
+[Back to topics](#topics)
 
 
-
-## Eras defined as separate chapters in a history course
+## Eras Defined as Separate Chapters in a History Course {#FHM-History}
 
 We now in consider Full House Modeling when a history course is used to define distinct eras. First, the number of extreme observations $k$ is calculated. In this analysis, we will let $k = \lfloor1.3\sqrt n \rfloor$, the lower bound of the range for $k$ in [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf). This value of $k$ was chosen so that our tail probability modeling fits the data well (see the eight plots below).
 
-\vspace{12pt}
 
 ```{r k-compute-ystarstar-hist, cache = TRUE}
 system.time({
@@ -719,9 +693,9 @@ kmat_hist[, -1] = t(apply(kmat_hist, 1, function(x) c(min(x[-1]), max(x[-1]))))
 kmat_hist
 ```
 
-\vspace{12pt}
+
 We now calculate $y^{\star\star}$ and modeling information quantities through a call to the \texttt{compute\_ystarstar} function.
-\vspace{12pt}
+
 
 ```{r compute-ystarstar-hist, cache = TRUE}
 system.time({
@@ -742,9 +716,7 @@ ystar_mat_hist
 ```
 
 
-\vspace{12pt}
 We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
-\vspace{12pt}
 
 
 ```{r}
@@ -766,12 +738,8 @@ for(j in 5:8){
 ```
 
 
-
-\vspace{12pt}
 We now compute latent talent estimates using Full House Modeling and the stored $y^{\star\star}$ values via the \texttt{talent\_computing\_nonpara} function.
 
-
-\vspace{12pt}
 
 ```{r talent-scores-hist, cache = TRUE}
 system.time({
@@ -789,9 +757,8 @@ system.time({
 ```
 
 
-\vspace{12pt}
 Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 8 distinct eras defined using a history course as a guide.
-\vspace{12pt}
+
 
 ```{r}
 hpi_adjust_hist = hpi_adjust_hist %>% arrange(desc(hpi_talent))
@@ -802,7 +769,6 @@ kable(hpi_adjust_hist %>% as.data.frame() %>% head(50), format = "html") %>%
 ```
 
 
-\vspace{12pt}
 We now display some information on the components of Full House modeling. In the table below, we report: 
 
 1. The difference that the highest achiever stood out from the next highest, $Y_{i, (n_i)} - Y_{i(n_i-1)}$.
@@ -810,8 +776,6 @@ We now display some information on the components of Full House modeling. In the
 3. The upper bound $Y_i^{\star\star}$.
 4. The realized Beta value $U_{i,(j)} \sim \operatorname{Beta}(j, n_i+1-j)$.
 5. The percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. This is a measure of how far the highest achiever stood from their peers.
-
-\vspace{12pt}
 
 
 ```{r}
@@ -825,10 +789,10 @@ foo_hist = data.frame(diff = sapply(hpi_generations_hist, function(x){
          group = seq_along(hpi_generations_hist))
 foo_hist
 ```
-
 \vsapce{12pt}
+
 Below are the highest achievers in each era as judged by the percentile $F_{U_{i,(j)}}\left(U_{i,(j)}\right)$. 
-\vspace{12pt}
+
 
 ```{r}
 bar_hist = cbind(foo_hist, do.call(rbind, 
@@ -840,14 +804,13 @@ bar_hist = cbind(foo_hist, do.call(rbind,
 bar_hist
 ```
 
-\vspace{12pt}
+
 At each era we now calculate the $P(X \leq x \mid p)$ and $P(X \geq x \mid p)$ where:
 
 1. $X$ is the number of top 50 bios at or before the specified era, and $x$ is the observed value. $X \sim \text{Binomial(50, p)}$.
 2. The proportion $p$ is the proportion of the cumulative historical population at or the specified era. 
 
 We calculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with units in a history class to define distinct eras and the top 50 raw unadjusted Pantheon ranking list. The plot indicates that the Pantheon ranking list exhibits a minor lack of favoritism over several time periods. 
-\vspace{12pt}
 
 
 ```{r, echo = FALSE}
@@ -969,9 +932,7 @@ dev.off()
 ```
 
 
-\vspace{12pt}
 It is worth noting that the above analysis includes the full range of years in the Pantheon data set, but the earliest birthdate in either top 50 list is 2000 BC. We recalculate both probabilities and corresponding chances $1 / P(X \leq x \mid p)$ and $1 / P(X \geq x \mid p)$ for both the era-adjusted list obtained using Full House Modeling with units in a history class to define distinct eras and the top 50 raw unadjusted Pantheon ranking list restricted to 2000 BC - 1980 AD. The plot indicates that both methods exhibit favoritism to older era historical figures.
-\vspace{12pt}
 
 
 ```{r, echo = FALSE}
@@ -1090,9 +1051,10 @@ ggplot(data_membership_chances_both,
   theme_minimal(base_size = 16)
 dev.off()
 ```
+[Back to topics](#topics)
 
 
-# Comparison of approaches
+# Comparison of Approaches {#Comparison}
 
 We now investigate how our era-adjusted rankings of historical figures compare with the original Pantheon ranking list. The plots below show agreement proportion as a function of the number of top biographies. For ranking lists displaying the top 100 or fewer biographies, our approach which defined eras by centuries exhibits much less agreement with the Pantheon ranking list than the approach which defined eras as separate units in a history course. The opposite is observed after the number of top biographies exceeds 100. Recall that our two era-adjustment methods were applied to data sets with different date ranges, and are therefore compared to different Pantheon ranking lists.
 
@@ -1237,13 +1199,14 @@ ggplot(ranks, aes(x = top)) +
   scale_colour_manual(values = c("red", "blue"), name = "era definition")
 dev.off()
 ```
+[Back to topics](#topics)
 
 
-# Interesting changes in rankings
+# Interesting Changes in Rankings {#Changes}
 
-We have already discussed how each era-adjusted rankings of historical figures agree with the original Pantheon ranking list, and the differences in historical figures included in each top 50 list. Here we take a closer look at how ranking lists change when era-adjustment is applied.
+We have already discussed how each era-adjusted rankings of historical figures agree with the original Pantheon ranking list, and the differences in historical figures included in each top 50 list. Here we take a closer look at how ranking lists change when era-adjustment is applied. [Back to topics](#topics)
 
-## Eras defined as "vs one's peers"
+## Eras Defined as Centuries {#Changes-Centuries}
 
 ```{r movement_vs_peers, cache = TRUE}
 foo_vs_peers = cbind(
@@ -1263,7 +1226,6 @@ combined_vs_peers = data.frame(name = hpi_adjust_vs_peers$name,
                         }))
 rownames(combined_vs_peers) = c()
 ```
-
 
 The tables in this section display historical figures that are elevated or penalized by era-adjustment when eras are defined by centuries. Each code block below will output two tables. The first table will be the 10 historical figures most elevated from the top-x ranking list after era adjustment is applied. The second table will be the 10 historical figures from the top-x Pantheon list most penalized by era-adjustment.
 
@@ -1378,11 +1340,13 @@ kable(foo, format = "html") %>%
   kable_styling(full_width = FALSE, position = "left") %>%
   scroll_box(width = "100%")
 ```
+[Back to topics](#topics)
 
 
-## Eras defined as separate chapters in a history course
+## Eras defined as Separate Chapters in a History Course {#Changes-History}
 
 The tables in this section display historical figures that are elevated or penalized by era-adjustment when eras are defined by separate chapters in a history course. Each code block below will output two tables. The first table will be the 10 historical figures most elevated from the top-x ranking list after era adjustment is applied. The second table will be the 10 historical figures from the top-x Pantheon list most penalized by era-adjustment.
+
 
 ```{r movement_hist, cache = TRUE}
 foo_hist = cbind(
@@ -1512,3 +1476,165 @@ kable(foo, format = "html") %>%
   kable_styling(full_width = FALSE, position = "left") %>%
   scroll_box(width = "100%")
 ```
+[Back to topics](#topics)
+
+
+
+# Sensitivity in Eligible Population {#Sensitivity-Eligible}
+
+Here we investigate how the results change when we change the historic eligible population. Our attention is when eras are defined by centuries. [Back to topics](#topics)
+
+
+## Linear Increase in Eligible Population {#Linear-Increase}
+
+Here we investigate how the historic rankings change when the historic eligible population exhibits a linear increase instead of an exponential increase as [originally calculated](#Centuries).
+
+
+```{r}
+n_gen = length(Epop_generations)
+m1 = lm( Epop_generations[c(1,n_gen-1)] ~ c(1,n_gen-1) )
+Epop_generations_linear =  c(coef(m1)[1] + coef(m1)[2] * 1:(n_gen-1), Epop_generations[n_gen])
+```
+
+
+This alternate historic eligible population is displayed below.
+
+
+```{r}
+cum_prop_population_linear = cumsum(Epop_generations_linear) / sum(Epop_generations_linear)
+gen_stats_linear = data.frame(
+  gen_start = generations,
+  gen_end = c(generations[-1] -1, 1980),
+  gen_pop = Epop_generations_linear, 
+  cum_prop_population = cum_prop_population_linear, 
+  n = sapply(hpi_generations, nrow)
+)
+
+ggplot(gen_stats_linear) + 
+  aes(x = gen_start, y = gen_pop) +  
+  geom_bar(stat = "identity") + 
+  scale_x_continuous(breaks = seq(-800, 2000, by = 400)) + 
+  theme_minimal(base_size = 14) + 
+  labs(x = "year", y = "population",
+       title ="Historical eligible population for each century (linear increase)", 
+       subtitle = "800 BC to 1980 AD")
+```
+
+
+We now compute latent talent estimates using Full House Modeling with respect to this alternate historic eligible population.
+
+
+```{r linear-pop-centuries, cache=TRUE}
+system.time({
+  hpi_adjust_vs_peers_linear = 
+    do.call(rbind, 
+            mclapply(seq_along(hpi_generations), 
+                     mc.cores = nCores, function(j){
+                       cbind(hpi_generations[[j]], 
+                             "hpi_talent" = 
+                               talent_computing_nonpara(ystar = as.numeric(ystar_mat[j, 1]), 
+                                                        y = hpi_generations[[j]] %>% pull(hpi), 
+                                                        npop = Epop_generations_linear[[j]]))
+                     })) %>% arrange(desc(hpi_talent))
+})
+```
+
+
+Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling with respect to this alternate historic eligible population.
+
+
+```{r}
+kable(hpi_adjust_vs_peers_linear %>% as.data.frame() %>% head(50), 
+      format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+```
+
+
+This top 50 list has 40 names in common with the [original list with centuries used to designate eras](#FHM-Centuries), suggesting respectable sensitivity.
+
+
+```{r}
+common = 
+  intersect(hpi_adjust_vs_peers_linear %>% as.data.frame() %>% head(50) %>% pull(name),
+            hpi_adjust_vs_peers %>% as.data.frame() %>% head(50) %>% pull(name))
+length(common)
+```
+[Back to topics](#topics)
+
+
+## Flat Increase in Eligible Population {#Flat-Increase}
+
+Here we investigate how the historic rankings change when the historic eligible population exhibits a linear increase, but is mostly flat, instead of an exponential increase as [originally calculated](#Centuries).
+
+
+```{r}
+Epop_generations_flat = Epop_generations[1] + 1000000 * 0:(n_gen-1)
+```
+
+
+This alternate historic eligible population is displayed below.
+
+
+```{r}
+cum_prop_population_flat = cumsum(Epop_generations_flat) / sum(Epop_generations_flat)
+gen_stats_flat = data.frame(
+  gen_start = generations,
+  gen_end = c(generations[-1] -1, 1980),
+  gen_pop = Epop_generations_flat, 
+  cum_prop_population = cum_prop_population_flat, 
+  n = sapply(hpi_generations, nrow)
+)
+
+ggplot(gen_stats_flat) + 
+  aes(x = gen_start, y = gen_pop) +  
+  geom_bar(stat = "identity") + 
+  scale_x_continuous(breaks = seq(-800, 2000, by = 400)) + 
+  theme_minimal(base_size = 14) + 
+  labs(x = "year", y = "population",
+       title ="Historical eligible population for each century (flat increase)", 
+       subtitle = "800 BC to 1980 AD")
+```
+
+
+We now compute latent talent estimates using Full House Modeling with respect to this alternate historic eligible population.
+
+
+```{r flat-linear-pop-centuries, cache=TRUE}
+system.time({
+  hpi_adjust_vs_peers_flat = 
+    do.call(rbind, 
+            mclapply(seq_along(hpi_generations), 
+                     mc.cores = nCores, function(j){
+                       cbind(hpi_generations[[j]], 
+                             "hpi_talent" = 
+                               talent_computing_nonpara(ystar = as.numeric(ystar_mat[j, 1]), 
+                                                        y = hpi_generations[[j]] %>% pull(hpi), 
+                                                        npop = Epop_generations_flat[[j]]))
+                     })) %>% arrange(desc(hpi_talent))
+})
+```
+
+
+Here is the top 50 list of the most impactful people in history ranked by estimated latent talent obtained via Full House Modeling with respect to this alternate historic eligible population.
+
+
+```{r}
+kable(hpi_adjust_vs_peers_flat %>% as.data.frame() %>% head(50), 
+      format = "html") %>% 
+  kable_styling(full_width = FALSE, position = "left") %>%
+  scroll_box(width = "100%")
+```
+
+
+This top 50 list has 31 names in common with the [original list with centuries used to designate eras](#FHM-Centuries), which is fewer than a linear increase as to be expected.
+
+
+```{r}
+common = 
+  intersect(hpi_adjust_vs_peers_flat %>% as.data.frame() %>% head(50) %>% pull(name),
+            hpi_adjust_vs_peers %>% as.data.frame() %>% head(50) %>% pull(name))
+length(common)
+```
+[Back to topics](#topics)
+
