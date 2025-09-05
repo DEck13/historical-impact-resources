@@ -6,5 +6,6 @@ Era adjustment is made via [Full House Modeling](https://projecteuclid.org/journ
 
 - [Here is a reproducible technical report](https://htmlpreview.github.io/?https://github.com/DEck13/historical-impact-resources/blob/main/pantheon_history.html) containing the steps for creating our data set for the eligible historical populations that are used in our analyses.
 - [Here is a reproducible technical report](https://htmlpreview.github.io/?https://github.com/DEck13/historical-impact-resources/blob/main/pantheon_fullhouse.html) containing the steps the we used to obtain era-adjusted rankings of the impact of historical figures. Additional results and analyses are also provided. 
+- [Here is a reproducible technical report](https://htmlpreview.github.io/?https://github.com/DEck13/historical-impact-resources/blob/main/pantheon_wm_separate.html) containing the steps the we used to obtain era-adjusted rankings of the impact of historical figures when we modeled biological females and males separately and then combined the results. Additional results and analyses are also provided. 
 - [Here is a link](https://github.com/DEck13/fullhouse) to the `fullhouse` R package. This package contains functions that are used to perform the analysis in the previous technical report.
 

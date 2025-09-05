@@ -1,0 +1,616 @@
+---
+title: "Technical Report: Full House Modeling for rankings of historical figures separated by biological sex"
+author: "Daniel J. Eck and Shen Yan and Adrian Burgos Jr. and Elisha Cohen"
+date: ""
+output:
+  html_document
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+
+In this technical report we go through the steps that we took to rank historical figures via an era-neutral version of the Historical Popularity Index (HPI) in [Yu et al (2016)](https://www.nature.com/articles/sdata201575) obtained via Full House Modeling. In this report we perform our analyses on females and males separately, and the results are then combined together. 
+
+This technical report is reproducible by anyone who has the \texttt{fullhouse} package and our data sets. Long code chunks that create plots will be suppressed. Code for these plots is available in the accompanying .Rmd file. This report will cover the following topics:
+
+
+# List of Topics {#topics}
+
+- [Data Preparation](#Data): Data preprocessing steps and software
+- [Full House Modeling](#FHM): Definition of Full House Modeling
+  - [Full House Modeling for Females](#FHM-Females): Implementation, diagnostics, and results of Full House Modeling for females
+  - [Full House Modeling for Males](#FHM-Males): Implementation, diagnostics, and results of Full House Modeling for males
+  - [Combined Analysis](#Combined): Combination of results from the female and male analyses
+
+
+# Data Preparation {#Data}
+
+Population data collection is through 05/17/2022. The Pantheon data used is the [2020 Person Dataset version 2.0](https://pantheon.world/data/datasets). We load in the following software packages:
+
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(readxl)
+library(splines)
+library(Hmisc)
+library(parallel)
+library(orderstats)
+library(Pareto)
+library(doParallel)
+library(fullhouse)
+
+# get number of cores
+nCores = detectCores() - 2
+nCores
+```
+
+
+We load in the Pantheon data set
+
+
+```{r}
+persons2020 = read_csv("person_2020_update.csv")
+```
+
+
+We remove duplicates of bios with a common name and birth year.
+
+
+```{r}
+persons2020 = 
+  persons2020 %>% distinct(name, birthyear, .keep_all = TRUE)
+```
+
+
+We change Donald Trump's 2020 HPI value of 94.9 to his 2022 HPI value of 78.13. Our aim is to study the most impactful people in history. We do not think it proper to conduct our analyses with Donald Trump's popularity in 2020 when he had fallen 679 spots in two years and is still living at the time of this analysis. While HPI is a proxy measure of impact through popularity, the intention of HPI is to correct recency biases. We felt it best to ignore an active historical figure whose current popularity might not be reflective of their historic popularity.
+
+
+```{r}
+persons2020 = persons2020 %>% 
+  mutate(hpi = ifelse(name == "Donald Trump", 78.13, hpi)) %>% 
+  arrange(desc(hpi))
+```
+
+
+Here we define eras to constitute a relatively narrow range of years. The most recent year in our analysis in 1980. The eras will be defined by the centuries, and we will only consider eras that have at least 50 people in the Pantheon data set. Our first era begins in 800 BC, the second begins in 700 BC, and so on.
+
+We will define Jesus's and other Christian figures' birth year to be 0 AD. This is done to separate memorable Christian figures from memorable Roman figures into different peer groups. We moved Jesus instead of Julius Ceasar and other Roman figures because [Jesus's birth year is not exactly known](https://en.wikipedia.org/wiki/Jesus).
+
+
+```{r}
+## consider generations with increasing year ranges 
+## include country of birth
+generations = c(-8:19 * 100)
+persons2020_small = persons2020 %>% 
+  dplyr::select(name, gender, birthyear, bplace_country, hpi) %>% 
+  filter(birthyear >= -800, birthyear <= 1980)
+persons2020_small$group = 
+  unlist(lapply(persons2020_small$birthyear, 
+    function(x) sum(x >= generations)))
+persons2020_small = persons2020_small %>% filter(group > 0)
+persons2020_small = persons2020_small %>% 
+  mutate(group = ifelse(name %in% c("Jesus", "Saint Peter", "Mary Magdalene", 
+                     "Andrew the Apostle", "James, son of Alphaeus"), 9, group))
+```
+
+
+We estimate the eligible population for females and males following similar steps as those in the \texttt{pantheon\_history} script. In this version we do not account for discrimination against females because this analyses will compare females and males separately. We will suppose that the eligible populations for females and males will be half the estimate of the total population after adjusting for non-European discrimination that is present in the original Pantheon rankings. The eligible population is tabulated in a data set named \texttt{dat\_HPI\_eligible\_FM}
+
+
+```{r}
+#### Edited up to Here: Need to decide how to construct historical eligible population
+####  - Probably no females correction if analyzing males and females separately
+####  - Also do a breakdown across males vs females and Europe/US vs non-Europe/US
+####    - Possibly no Euro correction for the above 4 group breakdown
+
+#head(persons2020_small)
+
+tab = table(persons2020_small$bplace_country) %>% sort(., decreasing = TRUE) 
+#tab
+
+## https://www.countries-ofthe-world.com/countries-of-europe.html
+Europe = c("United Kingdom", "Germany", "France", "Italy", "Russia", "Spain", 
+           "Poland", "Sweden", "Turkey", "Austria", "Netherlands", "Ukraine", 
+           "Greece", "Belgium", "Czechia", "Denmark", "Hungary", "Switzerland", 
+           "Norway", "Romania", "Finland", "Ireland", "Croatia", "Cyprus", 
+           "Portugal", "Serbia", "Bulgaria", "Georgia", "Slovakia", "Estonia", 
+           "Bosnia and Herzegovina", "Latvia", "Belarus", "Lithuania", 
+           "Slovenia", "Azerbaijan", "Iceland", "Armenia", "Kazakhstan", 
+           "North Macedonia", "Montenegro", "Albania", "Moldova", "Luxembourg", 
+           "Malta", "Kosovo", "Monaco", "San Marino", "Andorra", 
+           "Liechtenstein", "Czech Republic", "Vatican City")
+
+## Continental North America
+North_America = c("United States", "Canada", "Mexico")
+```
+
+```{r, echo = FALSE}
+# PRB link: https://www.prb.org/articles/how-many-people-have-ever-lived-on-earth/
+# Sources as of November 2022: Toshiko Kaneda, Charlotte Greenbaum, and 
+# Carl Haub, 2022 World Population Data Sheet (Washington, DC: Population 
+# Reference Bureau, 2022); United Nations, Department of Economic and 
+# Social Affairs, World Population Prospects: The 2022 Revision (New York: 
+# United Nations, 2022); personal communication with Dudley L. Poston Jr., 
+# Professor of Sociology and the George T. and Gladys H. Abell Professor 
+# of Liberal Arts, Texas A&M University.   
+mat = rbind(
+  c(-50000, 7856100002),
+  c(-8000, 	8993889771),
+  c(1,     55019222125),
+  c(1200,  81610565125),
+  c(1650,  94392567578),
+  c(1750,  97564499091),
+  c(1850, 101610739100),
+  c(1900, 104510976956), 
+  c(1950, 107901175171), 
+  c(2000, 113966170055), 
+  c(2010, 115330173460), 
+  c(2022, 117020448575)
+)
+colnames(mat) = c("year", "cum_pop")
+dat = as.data.frame(mat)
+## females and males (divide by 2)
+dat$cum_pop = dat$cum_pop / 2
+
+
+m1 = lm(cum_pop ~ year + I(year^2) + I(exp(year/1000)), data = dat)
+summary(m1)
+
+plot(dat$cum_pop, m1$residuals/dat$cum_pop, 
+     xlab = "cumulative population", 
+     ylab = "residual divided by cumulative population", 
+     pch = 19)
+
+p1 = predict(m1, newdata = data.frame(year = -3500))
+p2 = predict(m1, newdata = data.frame(year = 1983))
+#tot = dat %>% filter(year == 2022) %>% dplyr::select(cum_pop) 
+dat2 = data.frame(year = c(-3500 + 0:54 *100, 1980), 
+                  cum_pop = predict(m1, newdata = 
+                                      data.frame(year = c(-3500 + 0:54 *100, 1980))))
+
+dat3 = dat2 %>% 
+  # https://www.scottmanning.com/archives/World%20Population%20Estimates%20Interpolated%20and%20Averaged.pdf
+  mutate(cumulative_pop = cum_pop - cum_pop[1] + 39128604 ) %>% 
+  dplyr::select(year, cumulative_pop)
+dat3$diff = c(dat3$cumulative_pop[1], dat2 %>% pull(cum_pop) %>% diff())
+
+
+## Get regional populations from the Maddison Project Database link below:
+regional_pop = read_excel("~/research/pantheon/mpd2020.xlsx", 
+                          sheet = "Regional data")
+regional_pop$USA = c(9638453 / 1000,   # 1820
+                     23191876 / 1000,  # 1850
+                     38558371 / 1000,  # 1870
+                     76.3 * 1000,      # 1900
+                     106021537 / 1000, # 1920
+                     132164569 / 1000, # 1940
+                     151325798 / 1000, # 1950
+                     179.3 * 1000,     # 1960
+                     203392031 / 1000, # 1970
+                     226.5 * 1000,     # 1980
+                     250.1 * 1000,     # 1990
+                     282.2 * 1000,     # 2000
+                     309.3 * 1000,     # 2010
+                     323.1 * 1000,     # 2016
+                     325.1 * 1000,     # 2017
+                     326.8 * 1000)     # 2018   
+
+## Find regional populations for year 1 using the links below: 
+# https://en.wikipedia.org/wiki/List_of_states_by_population_in_1_CE
+# https://www.rug.nl/ggdc/
+dat_WIKI_1CE = data.frame(Year = 1, 
+                          Western_Europe = 24700,
+                          Western_Offshoots = 1170,
+                          Eastern_Europe = 4750,
+                          Latin_America = 18600, 
+                          Asia_South_and_South_East = 75000,
+                          Asia_East = 3000 + 59600,
+                          Middle_East = 36600,
+                          Sub_Sahara_Africa = 16500, 
+                          World = 249420, 
+                          USA = NA)
+regional_pop = rbind(dat_WIKI_1CE, regional_pop)
+## compute proportion of World population that is European
+## compute proportion of World population that is European or American
+regional_pop %>% 
+  mutate(Epct = (Western_Europe + Eastern_Europe)/World) %>% 
+  mutate(USAEpct = (Western_Europe + Eastern_Europe + USA)/World) %>% 
+  dplyr::select(Year, Western_Europe, Eastern_Europe, World, 
+                Epct, USAEpct)
+
+## aggregate results and add to our data set
+Epct = rbind(regional_pop %>% 
+               mutate(Epct = (Western_Europe + Eastern_Europe) / World, 
+                      USAEpct =  (Western_Europe + Eastern_Europe + USA) / World) %>% 
+               select(Year, Epct, USAEpct), 
+             c(1000, 56.4/295, NA), 
+             c(1500, 61.6/461, NA),
+             c(1600, 78.0/554, NA), 
+             c(1700, 122/603, (122 + 0.25)/603), 
+             c(1800, 195/990, (195 + 5.3)/990),
+             c(-3500, 0.11, NA)
+) %>% arrange(Year)
+dat4 = dat3 %>% mutate(Epct = approx(
+  x = Epct$Year, 
+  y = Epct$Epct, 
+  xout = dat3$year)$y) 
+dat4$USAEpct = approx(
+  x = Epct$Year, 
+  y = Epct$USAEpct, 
+  xout = dat3$year)$y
+
+## We compute an overall European membership proportion based on the 
+## representation in the top 50 Pantheon list over time:
+##      Europe pct -3500-1980: 39/50
+##      Europe pct -3500-1900: 39/50
+##       Europe pct 1801-1900: 41/50
+##       Europe pct 1900-1980: 20/50
+##          USA pct 1900-1980: 16/50
+## USA + Europe pct 1900-1980: 36/50  
+##
+## scale the cumulative population differences adjusted for discrimination 
+## against females by European discrimination
+dat5 = dat4 %>% mutate(Escale = ifelse(year < 1900, 0.74, 0)) %>% 
+  mutate(Escale = ifelse(year >= 1950, 0.40, Escale)) %>% 
+  mutate(Escale = ifelse(year == 1900, mean(c(0.4, 0.74)), Escale)) %>% 
+  mutate(Epart = Epct / Escale) %>% 
+  mutate(USAEscale = ifelse(year < 1900, 0.01, 0)) %>% # not relevant
+  mutate(USAEscale = ifelse(year >= 1900, 0.72, USAEscale)) %>% 
+  mutate(USAEpart = USAEpct / USAEscale) %>% 
+  mutate(part = Epart)
+dat5[dat5$year %in% c(1900,1980), ]$part = 
+  dat5[dat5$year %in% c(1900,1980), ]$USAEpart
+
+## add smoothing
+dat6 = dat5 %>%   
+  mutate(part = predict(lm(part ~ ns(year, df=5), data=dat5))) %>% 
+  mutate(diff_Europe = round(diff * part)) %>% 
+  mutate(cumulative_membership = cumsum(diff_Europe))
+
+## Calculate the HPI eligible cumulative population for every year from 
+## -3500 to 1973 by linear interpolation and linear extrapolation
+## extender. The year 1973 is chosen to only include people who have 
+## reached the age of 50 
+range = -3500:1980
+dat_HPI_eligible_FM = 
+  data.frame(year = range, 
+             cumulative_population = 
+               approxExtrap(x = dat6$year, 
+                            y = dat6$cumulative_membership, 
+                            xout = range)$y
+  )
+#write_csv(dat_HPI_eligible_FM, "dat_HPI_eligible_FM.csv")
+```
+
+
+The estimated cumulative eligible population is displayed below.
+
+
+```{r}
+ggplot(dat_HPI_eligible_FM) + 
+  aes(x = year, y = cumulative_population) + 
+  ylim(-1e6, 1e10) + 
+  geom_line() + 
+  theme_minimal() + 
+  labs( x = "year", y = "cumulative population",
+        title ="Cumulative historical eligible population", 
+        subtitle = "3500 BC to 1980 AD")
+```
+
+
+We now split the Pantheon data set and historical eligible population data set into smaller chunks containing data for each biological sex and each separate era. We will consider biographies beginning in 100 BC dues to sparse biological entries for females prior to this date. Below are two important quantities: 
+
+1. **hpi\_generations**: This list contains the name, birth year, and HPI value of individuals within the historical eras.
+2. **Epop\_generations**: This data set contains the the number of people that populate each era. This population is defined as the difference in the range of population tallies recorded for end points defining an era. The first era runs from 100 BC to 1 BC. The population of the era is the cumulative historical population at 1 BC minus the cumulative historical population at 100 BC.
+
+
+```{r}
+foo = split(persons2020_small, f = as.factor(persons2020_small$gender))
+
+## bios for females and males
+persons2020_small_F = foo$F
+persons2020_small_M = foo$M
+persons2020_small_F_8 = persons2020_small_F %>% filter(group >= 8)
+persons2020_small_M_8 = persons2020_small_M %>% filter(group >= 8)
+hpi_generations_F_8 = lapply(split(persons2020_small_F_8, 
+                               f = as.factor(persons2020_small_F_8$group)), 
+                         function(xx) xx %>% select(-group))
+hpi_generations_M_8 = lapply(split(persons2020_small_M_8, 
+                                   f = as.factor(persons2020_small_M_8$group)), 
+                             function(xx) xx %>% select(-group))
+
+## population tally for each generation
+Epop_generations_8 = c(dat_HPI_eligible_FM %>% 
+                         filter(year >= - 100, 
+                                year %in% c(generations, 1980)) %>% 
+                       pull(cumulative_population) %>% diff())
+cum_prop_population_8 = cumsum(Epop_generations_8) / sum(Epop_generations_8)
+generations_8 = generations[generations >= - 100] 
+```
+
+
+Below we display some information on each of the eras. We display the populations of an era, the cumulative proportion of the historical population through that era, and the number of Pantheon biographies in each era.
+
+
+```{r}
+gen_stats_F_8 = data.frame(
+  gen_start = generations_8,
+  gen_end = c(generations_8[-1] -1, 1980),
+  gen_pop = Epop_generations_8, 
+  cum_prop_population = cum_prop_population_8, 
+  n = sapply(hpi_generations_F_8, nrow)
+)
+gen_stats_F_8
+
+gen_stats_M_8 = data.frame(
+  gen_start = generations_8,
+  gen_end = c(generations_8[-1] -1, 1980),
+  gen_pop = Epop_generations_8, 
+  cum_prop_population = cum_prop_population_8, 
+  n = sapply(hpi_generations_M_8, nrow)
+)
+gen_stats_M_8
+```
+[Back to topics](#topics)
+
+
+# Full House Modeling {#FHM}
+
+Full House Modeling uses an interpolated empirical CDF $\widetilde{F}_{Y_i}$ as an estimate of the true distribution function for the $Y$ data as in [Yan (2025)](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-19/issue-2/Comparing-baseball-players-across-eras-via-novel-Full-House-Modeling/10.1214/24-AOAS1992.short). This estimator is constructed in the following manner: First, surrogate sample points %$\widetilde{Y}_{i,(1)}, \ldots, \widetilde{Y}_{i,(n_i+1)}$ as,
+$\widetilde{Y}_{i,(1)} =Y_{i,(1)}-Y^{*}_i$, 
+$\widetilde{Y}_{i,(j)} =\left(Y_{i,(j)}+Y_{i,(j-1)}\right) / 2, j=2, \ldots, n_i$, and 
+$\widetilde{Y}_{i,(n_i+1)} =Y_{i,(n_i)}+Y^{**}_i$. Here, 
+$Y^*_i$ is the value to construct the lower bound and $Y^{**}_i$ is the value to construct the upper bound. Now let,
+\begin{equation} \label{eq:empcdf}
+\widetilde{F}_{Y_i}(t) = 
+  \sum_{j=1}^{n_i}\left(\frac{j-1}{n_i} + \frac{t-\widetilde{Y}_{i,(j)}}{n_i\left(\widetilde{Y}_{i,(j+1)}-\widetilde{Y}_{i,(j)}\right)}\right) 1\left(\widetilde{Y}_{i,(j)} \leq t<\widetilde{Y}_{i,(j+1)}\right)+1\left(t \geq \widetilde{Y}_{i,(n_i+1)}\right).
+\end{equation}
+[Back to topics](#topics)
+
+
+## Full House Modeling for Females {#FHM-Females}
+
+We first compute $y^{\star\star}$ using the \texttt{compute\_ystarstar} function in the \texttt{fullhouse} package. First, the number of extreme observations $k$ is calculated following a similar approach to that outlined in Section 2.2.3 of [Yan (2025)](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-19/issue-2/Comparing-baseball-players-across-eras-via-novel-Full-House-Modeling/10.1214/24-AOAS1992.short) and Section 5 of [Scholz (1995)](https://faculty.washington.edu/fscholz/Reports/extrap.pdf) which is implemented in the \texttt{k\_finder} function in the \texttt{fullhouse} package. 
+
+
+```{r k-compute-ystarstar-females, cache = TRUE}
+system.time({
+  kmat_F_8 = do.call(rbind, mclapply(seq_along(hpi_generations_F_8), 
+                                 FUN = function(j) {
+                                   k_finder(x = hpi_generations_F_8[[j]] %>% pull(hpi))  
+                                 }, mc.cores = nCores))
+})
+```
+
+
+The modeling of the $k$ tail probabilities also closely follows Section 2.2.3 of [Yan (2025)](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-19/issue-2/Comparing-baseball-players-across-eras-via-novel-Full-House-Modeling/10.1214/24-AOAS1992.short). However, there are some notable differences. The main difference is that the simple modeling approach in Section 2.2.3 of [Yan (2025)](https://projecteuclid.org/journals/annals-of-applied-statistics/volume-19/issue-2/Comparing-baseball-players-across-eras-via-novel-Full-House-Modeling/10.1214/24-AOAS1992.short) does not work well for all eras that we consider. Namely, there is a problem with model fit in some circumstances and a value for $y^{\star\star}$ cannot be computed. We add local polynomial models (fit with \texttt{loess} in R) on the linear and logistic scale to the set of candidate models. Quadratic and cubic models were also considered. 
+
+The task of computing $y^{\star\star}$ is implemented in the \texttt{compute\_ystarstar} function which is included in the \texttt{fullhouse} package and called below. This function computes $y^{\star\star}$ in the following manner: we first calculate $k$ as above. THe upper bound $Y_i^{**}$ is estimated through a connection between $\widetilde{F}_{Y_i}(Y_{i,(n_i)})$ and the regression fit on $(h(p_{i,j,.5,n_i}), Y_{i,(j)})$, $j = n_i -k + 1,\ldots,n_i$ where $h$ is a selected model in the tail probabilities. We find $Y_i^{**}$ as the solution of the following optimization problem 
+\begin{equation} \label{eq:optim}
+  Y_i^{**} = \text{argmin}_y\Big|h^{-1}(Y_{i,(n_i)}) - \widetilde{F}_{Y_i}(Y_{i,(n_i)};y)\Big|,	
+\end{equation}
+where $\widetilde{F}_{Y_i}(\cdot;y)$ is $\widetilde{F}_{Y_i}$ defined with $y$ replacing $Y_i^{**}$ in its construction. 
+
+In addition to $y^{\star\star}$, the \texttt{compute\_ystarstar} function includes the tail probability model and data used to fit the model for each era.
+
+
+```{r compute-ystarstar-females, cache = TRUE}
+system.time({
+  out_F_8 = mclapply(seq_along(hpi_generations_F_8), 
+                 FUN = function(j) { 
+                   compute_ystarstar(x = hpi_generations_F_8[[j]] %>% pull(hpi), 
+                                     k = kmat_F_8[j, 1])
+                 }, 
+                 mc.cores = nCores)
+})
+
+## get ystarstar values
+ystar_mat_F_8 = do.call(rbind, lapply(seq_along(hpi_generations_F_8), 
+                                  function(j) out_F_8[[j]]$ystar )
+)
+```
+
+
+We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
+
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 1:6){
+  plot(out_F_8[[j]]$W, out_F_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_F_8[[j]]$W, predict(out_F_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 7:12){
+  plot(out_F_8[[j]]$W, out_F_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_F_8[[j]]$W, predict(out_F_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 13:18){
+  plot(out_F_8[[j]]$W, out_F_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_F_8[[j]]$W, predict(out_F_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(1,3))            
+for(j in 19:21){
+  plot(out_F_8[[j]]$W, out_F_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_F_8[[j]]$W, predict(out_F_8[[j]]$model))  
+}
+```
+
+
+We now compute latent talent estimates using Full House Modeling and the stored $y^{\star\star}$ values. This task is implemented in the \texttt{talent\_computing\_nonpara} function which is included in the \texttt{fullhouse} package and called below. These estimates of latent talent are
+$$
+	F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(\widetilde{F}_{Y_{i}}\left(Y_{i,(j)} \right)\right)\right) \approx F_{X_{i, (N_i - n_i + j)}}^{-1}\left(F_{U_{i,(j)}}\left(U_{i,(j)}\right)\right) = X_{i, (N_i - n_i + j)},
+$$
+where we suppose that $X_{i,j} \overset{iid}{\sim} \text{Pareto}(\alpha)$, $\alpha = 1.16$ (the value corresponding to the [Pareto principle](https://en.wikipedia.org/wiki/Pareto_principle)), $j = 1,\ldots,n_i$.
+
+
+```{r talent-scores-females, cache = TRUE}
+## vs your peers
+system.time({
+  hpi_adjust_vs_peers_F_8 = 
+    mclapply(seq_along(hpi_generations_F_8), mc.cores = nCores, function(j){
+      talent_computing_nonpara(ystar = as.numeric(ystar_mat_F_8[j, 1]), 
+                               y = hpi_generations_F_8[[j]]$hpi,
+                               npop = Epop_generations_8[[j]])
+      }) 
+  })
+```
+
+```{r}
+hpi_era_adjusted_F_8 = do.call(rbind, lapply(seq_along(hpi_adjust_vs_peers_F_8), function(j){
+  foo = cbind(hpi_generations_F_8[[j]], hpi_adjust_vs_peers_F_8[j]) 
+  colnames(foo)[ncol(foo)] = "talent"
+  foo
+})) %>% 
+  select(-gender) %>%  
+  arrange(desc(talent))
+```
+
+
+Here is the top 50 list of the most impactful females in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 21 distinct eras defined by centuries to designate peer groups. Females are modeled separately from males in this analysis.
+
+
+```{r}
+hpi_era_adjusted_F_8 %>% as.data.frame() %>% head(50)
+```
+[Back to topics](#topics)
+
+
+## Full House Modeling for Males {#FHM-Males}
+
+Modeling for males follows the same steps as the modeling for females.
+
+
+```{r k-compute-ystarstar-males, cache = TRUE}
+system.time({
+  kmat_M_8 = do.call(rbind, mclapply(seq_along(hpi_generations_M_8), 
+                                     FUN = function(j) {
+                                       k_finder(x = hpi_generations_M_8[[j]] %>% pull(hpi))  
+                                     }, mc.cores = nCores))
+})
+
+
+system.time({
+  out_M_8 = mclapply(seq_along(hpi_generations_M_8), 
+                     FUN = function(j) { 
+                       compute_ystarstar(x = hpi_generations_M_8[[j]] %>% pull(hpi), 
+                                         k = kmat_M_8[j, 1])
+                     }, 
+                     mc.cores = nCores)
+})
+
+## get ystarstar values
+ystar_mat_M_8 = do.call(rbind, lapply(seq_along(hpi_generations_M_8), 
+                                      function(j) out_M_8[[j]]$ystar )
+)
+```
+
+
+We now provide the line of best fit for the tail probabilities for each era. We can see adequate fit throughout.
+
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 1:6){
+  plot(out_M_8[[j]]$W, out_M_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_M_8[[j]]$W, predict(out_M_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 7:12){
+  plot(out_M_8[[j]]$W, out_M_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_M_8[[j]]$W, predict(out_M_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(2,3))            
+for(j in 13:18){
+  plot(out_M_8[[j]]$W, out_M_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_M_8[[j]]$W, predict(out_M_8[[j]]$model))  
+}
+```
+
+```{r}
+par(mfrow = c(1,3))            
+for(j in 19:21){
+  plot(out_M_8[[j]]$W, out_M_8[[j]]$Y, main = paste("Era ", j), 
+       xlab = "function of tail probabilities", ylab = "hpi")
+  lines(out_M_8[[j]]$W, predict(out_M_8[[j]]$model))  
+}
+```
+
+
+We now compute latent talent estimates using Full House Modeling using the \texttt{talent\_computing\_nonpara} function.
+
+
+```{r talent-scores-males, cache = TRUE}
+## vs your peers
+system.time({
+  hpi_adjust_vs_peers_M_8 = 
+    mclapply(seq_along(hpi_generations_M_8), mc.cores = nCores, function(j){
+      talent_computing_nonpara(ystar = as.numeric(ystar_mat_M_8[j, 1]), 
+                               y = hpi_generations_M_8[[j]]$hpi,
+                               npop = Epop_generations_8[[j]])
+      }) 
+  })
+```
+
+```{r}
+hpi_era_adjusted_M_8 = do.call(rbind, lapply(seq_along(hpi_adjust_vs_peers_M_8), function(j){
+  foo = cbind(hpi_generations_M_8[[j]], hpi_adjust_vs_peers_M_8[j]) 
+  colnames(foo)[ncol(foo)] = "talent"
+  foo
+})) %>% select(-gender) %>%  
+  arrange(desc(talent))
+```
+
+
+Here is the top 50 list of the most impactful males in history ranked by estimated latent talent obtained via Full House Modeling. In this analysis there are 21 distinct eras defined by centuries to designate peer groups.
+
+
+```{r}
+hpi_era_adjusted_M_8 %>% as.data.frame() %>% head(50)
+```
+[Back to topics](#topics)
+
+
+## Combined Analysis {#Combined}
+
+We now combine the results from the separate analyses. Several of the most impactful historical figures are females. This is in stark contrast to previous analyses performed on data with baked-in gender biases.
+
+
+```{r}
+hpi_adjust_vs_peers = 
+  rbind(hpi_era_adjusted_M_8, 
+        hpi_era_adjusted_F_8) %>% 
+  arrange(desc(talent))
+hpi_adjust_vs_peers[1:50, ]
+```
+[Back to topics](#topics)
+
